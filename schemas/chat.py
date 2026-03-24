@@ -39,6 +39,11 @@ class ChatRequest(BaseModel):
         default=None,
         description="Community ID to embed in generated blueprints. Required for builder chat.",
     )
+    page_context: str | None = Field(
+        default=None,
+        description="Current page state snapshot sent by the frontend on every turn.",
+        max_length=16000,
+    )
 
 
 class ChatResponse(BaseModel):
@@ -49,10 +54,21 @@ class ChatResponse(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class UploadNeeded(BaseModel):
+    section: str = Field(..., description="Section type, e.g. 'gallery', 'hero'")
+    field: str = Field(..., description="Field name, e.g. 'images', 'image_url'")
+    index: Optional[int] = Field(default=None, description="Array index for list fields")
+    label: str = Field(..., description="Human-readable upload prompt label")
+
+
 class BuilderChatResponse(BaseModel):
     """Response from the builder chatbot. Always has a reply; blueprint is present when
     the AI generates or updates a page layout."""
     reply: str = Field(..., description="Conversational reply from the AI")
+    uploads_needed: Optional[list[UploadNeeded]] = Field(
+        default=None,
+        description="Upload prompts the frontend should render when sections need images",
+    )
     blueprint: Optional[PageBlueprint] = Field(
         default=None,
         description="Generated page blueprint if the user asked to build/modify a page",
