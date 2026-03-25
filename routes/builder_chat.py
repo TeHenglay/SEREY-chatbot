@@ -202,6 +202,8 @@ OR when just answering a question (no layout change):
 6. Use patches (not a full blueprint) when the user asks to change a specific thing (title, color, style).
 7. Pick styles intelligently based on the user's described vibe.
 8. Leave BLOG and RANKING sections with only title/description — their data is auto-fetched.
+   For FOOTER social_links, always use object format: [{"type": "facebook", "handle": "pagename"}]
+   Never use plain strings like ["facebook.com/pagename"].
 9. IMAGES: Whenever you create or update a section with image fields, always include "uploads_needed"
    in your JSON response. Rules:
    - "section" = section type in lowercase (e.g. "hero", "gallery", "about", "team", "custom", "testimonials")

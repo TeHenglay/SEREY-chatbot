@@ -3,7 +3,7 @@
 # API contract: POST /api/v2/landing-pages body = { community_id, content: [...sections] }
 
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -20,6 +20,23 @@ class SocialLink(BaseModel):
     type: str = Field(..., description="facebook | instagram | telegram | twitter")
     handle: str = ""
     url: str | None = None
+
+
+def _normalize_social_links(v: list) -> list:
+    result = []
+    for item in v:
+        if isinstance(item, str):
+            url = item.lower()
+            handle = item.rstrip("/").split("/")[-1]
+            link_type = "other"
+            for platform in ["facebook", "instagram", "telegram", "twitter", "youtube", "tiktok"]:
+                if platform in url:
+                    link_type = platform
+                    break
+            result.append({"type": link_type, "handle": handle, "url": item})
+        else:
+            result.append(item)
+    return result
 
 
 class VideoItem(BaseModel):
@@ -84,6 +101,13 @@ class SectionBlock(BaseModel):
     location: str | None = None
     logo_url: str | None = None
     social_links: list[SocialLink] | None = None
+
+    @field_validator("social_links", mode="before")
+    @classmethod
+    def normalize_social_links(cls, v):
+        if not isinstance(v, list):
+            return v
+        return _normalize_social_links(v)
 
     # --- VIDEO ---
     videos: list[VideoItem] | None = None
