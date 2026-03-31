@@ -247,9 +247,45 @@ SEREY_KNOWLEDGE = [
         "title": "Serey Support and Contact",
         "content": (
             "Users can get help from Serey through the following channels: "
-            "FAQ at /faq. "
-            "Email: contact@serey.io"
-            "Telegram: @jokerswild1985"
+            "FAQ page at /faq. "
+            "Email: contact@serey.io. "
+            "Telegram: @sereyio"
+        ),
+    },
+    {
+        "id": "serey_faq",
+        "category": "support",
+        "title": "Serey Frequently Asked Questions",
+        "content": (
+            "General:\n"
+            "Q: What is Serey? "
+            "A: Serey is a Web3 publishing platform that allows anyone to create their own online platform. "
+            "Users can build websites tailored to their audience using tools such as blogs, video pages, galleries, online shops, and more.\n"
+            "Q: What is a Superhub? "
+            "A: A Superhub is a platform that connects multiple smaller platforms around a shared topic such as Web3, sports, or political news. "
+            "It brings content, communities, and platforms together into one ecosystem.\n"
+            "Q: Can anyone create a platform on Serey? "
+            "A: Yes. Anyone can create their own platform on Serey. You can choose your topic, publish content, grow a community, "
+            "and connect your platform to existing Superhubs.\n\n"
+            "Platform & Tools:\n"
+            "Q: Do I need technical skills to build a platform? "
+            "A: No. Serey includes an intuitive CMS and an AI website builder that allow you to create and manage your platform without any technical knowledge.\n"
+            "Q: What domain or app options are available? "
+            "A: Platforms receive a free subdomain such as platformname.serey.io. "
+            "Platforms or Superhubs can also request a dedicated branded mobile app.\n"
+            "Q: Who controls the content on each platform? "
+            "A: Platform owners control and are responsible for the content they publish. Each platform operates independently within the Serey ecosystem.\n\n"
+            "Crypto & Rewards:\n"
+            "Q: Does Serey have its own token? "
+            "A: Yes. Serey uses the SRY token, which powers the ecosystem and can be used for rewards, governance, and transactions.\n"
+            "Q: How can users earn SRY tokens? "
+            "A: Users can earn SRY by publishing content, curating posts through voting, and participating actively in the ecosystem.\n"
+            "Q: Is it free to post and interact on Serey? "
+            "A: Yes. Posting, commenting, and voting on content are completely free.\n\n"
+            "Getting Started:\n"
+            "Q: How do I get started on Serey? "
+            "A: You can create an account, start a platform, publish content, or participate in existing communities — all from the Serey homepage. "
+            "Route: /faq"
         ),
     },
     {
