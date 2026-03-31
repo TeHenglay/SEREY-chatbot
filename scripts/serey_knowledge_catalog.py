@@ -7,12 +7,37 @@ SEREY_KNOWLEDGE = [
     {
         "id": "serey_overview",
         "category": "about",
-        "title": "What is Serey?",
+        "title": "About Serey — Our Story",
         "content": (
-            "Serey is a Cambodian digital marketplace platform that connects local buyers and sellers online. "
-            "The name 'Serey' (សេរី) means 'freedom' in Khmer — representing freedom to buy, sell, and grow. "
-            "Serey is built for Cambodian entrepreneurs, small businesses, and individual sellers who want to "
-            "reach a wider audience without needing a physical storefront."
+            "Serey is a publishing platform built on the belief that every voice deserves a home — free from censorship, owned by its creator. "
+            "Build your platform. Own your audience. Tell your story — free from censorship, owned entirely by you.\n\n"
+            "What is Serey? "
+            "Serey is a publishing platform that lets creators, journalists, and media companies launch customizable websites and online shops with no coding required. "
+            "Instead of just building websites, Serey allows you to create fully customizable social publishing platforms — all without the need for technical skills.\n\n"
+            "Our Purpose — Digital Sovereignty and Freedom: "
+            "Serey was founded with a powerful mission: to bring digital sovereignty and freedom back to the people. "
+            "In today's digital landscape, major social media corporations hold vast centralized power, silencing voices, censoring ideas, and shaping public opinion. "
+            "Serey was created to counter this control and restore the freedom for people to build social publishing platforms they can fully own and govern. "
+            "Censorship Resistant: your content, your rules — no central authority can silence your voice. "
+            "Full Ownership: own your platform, your data, and your community. "
+            "Global Access: publish freely to audiences anywhere in the world.\n\n"
+            "History — Origins: "
+            "2018: Serey was born in response to growing concerns over big tech's power to control and suppress information. "
+            "Revelations by whistleblowers exposed how centralized platforms could manipulate public opinion. "
+            "We recognized blockchain's potential to store and distribute content globally — making censorship nearly impossible and removing centralized points of control. "
+            "Today: a fully-featured publishing platform empowering creators worldwide to build spaces for free expression, unbounded by centralized authority. "
+            "Founded in 2018. Global platform. Zero coding required. 100% free expression.\n\n"
+            "Growth — From Local Beginnings to Global Impact: "
+            "What began as a solution for news and blogging in Cambodia quickly grew into a global platform. "
+            "Serey shifted from being a localized blog-sharing platform to a decentralized infrastructure, "
+            "empowering people worldwide to create their own social publishing platforms. "
+            "Today, Serey provides anyone with the tools to build a space for free expression, unbounded by the limitations of centralized authority.\n\n"
+            "How to Create Your Own Social Publishing Platform: "
+            "Creating a social publishing platform on Serey is simple and intuitive. "
+            "Users select from a variety of components — such as a landing page, blog, microblog, fundraising tools, or marketplace — "
+            "to build a platform perfectly suited to their community's needs. "
+            "This allows each creator to design a space that truly reflects their unique vision and values, free from outside interference or censorship. "
+            "Route: /about-us"
         ),
     },
     {
@@ -407,6 +432,35 @@ SEREY_KNOWLEDGE = [
             "She is a helpful Cambodian woman designed to guide users through the Serey marketplace, "
             "help them find shops, products, and navigate the various features of the platform. "
             "Her name, Soriya (សុរិយា), means 'sun' in Khmer, representing warmth and guidance."
+        ),
+    },
+    {
+        "id": "serey_advertising",
+        "category": "advertising",
+        "title": "Advertise on Serey",
+        "content": (
+            "Serey is Cambodia's #1 Web3 publishing platform — the most complete Web3 digital publishing platform "
+            "where users read, share, and discover every day. "
+            "Key audience stats: 12,000+ monthly active users, 43K+ monthly unique visitors, 96K+ page views. "
+            "80% Cambodian users with a growing international audience. "
+            "Ideal target group: Web3 and fintech savvy users, students, and young professionals. "
+            "30 partner platform owners all working together to expand Serey's total userbase. "
+            "Ideal for: Tourism & Travel, Hotels & Accommodation, Flights & Transport, Tours & Cruises, "
+            "Restaurants & Food, Exclusive Treatments & Wellness.\n\n"
+            "Advertising Packages:\n"
+            "1. Exclusive Partner (2 spots available): $2,000 (25% discount → $1,500). "
+            "Also available: 1 spot at $4,000 (35% discount → $2,600). "
+            "Placement: Serey Cambodia main page, Serey.io main page, FEED, under every blog post, Gallery top slider, "
+            "and top Market. Mobile app: top Gallery, top Video, top Blog, top Market. "
+            "Benefits: Maximum exposure across all key sections, 100% guaranteed visibility as first thing users see, "
+            "strong brand presence throughout the user journey.\n\n"
+            "2. Premium / Frontpage (2 spots available): $400 per spot (25% discount → $300). "
+            "Placement: Serey Cambodia main page and Serey.io main page. "
+            "Benefits: 100% guaranteed visibility — first thing users see.\n\n"
+            "3. SmartVey Partnership — Student Exposure (2 spots available): $200 per spot. "
+            "Placement: Smartvey main page, top Quiz page, top Blog page, top Gallery page. "
+            "Benefits: Direct visibility to thousands of active medical students.\n\n"
+            "To advertise, contact: contact@serey.io or Telegram: @sereyio"
         ),
     },
     # -----------------------------------------------------------------------
