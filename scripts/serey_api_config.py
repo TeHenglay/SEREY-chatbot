@@ -375,6 +375,8 @@ def transform_featured_items(data: dict) -> dict:
             title = it.get("title", "")
             price = it.get("price", "")
             itype = it.get("item_type", "item")
+            item_id = it.get("id", "")
+            shop_id = it.get("shop_id")
             disc = it.get("discount_percentage")
             expires = it.get("discount_expires_at")  # null means no expiry
             disc_str = ""
@@ -384,7 +386,16 @@ def transform_featured_items(data: dict) -> dict:
                     disc_str += f" (expires {expires})"
                 else:
                     disc_str += " (permanent discount)"
-            item_parts.append(f"{title} ({itype}, ${price}{disc_str})")
+            if item_id:
+                if itype == "book":
+                    url = f"/sereymarket/product/{item_id}?type=book"
+                elif shop_id:
+                    url = f"/sereymarket/product/{item_id}?shop_id={shop_id}"
+                else:
+                    url = f"/sereymarket/product/{item_id}"
+                item_parts.append(f"[{title}]({url}) ({itype}, ${price}{disc_str})")
+            else:
+                item_parts.append(f"{title} ({itype}, ${price}{disc_str})")
         if item_parts:
             lines.append(f"Community {cid}: {'; '.join(item_parts)}")
 
@@ -425,7 +436,18 @@ def transform_active_discounts(data: dict) -> dict:
         pct = it.get("discount_percentage", "")
         expires = it.get("discount_expires_at")  # null = permanent
         itype = it.get("item_type", "item")
-        line = f"{title} ({itype}): was ${original}, now ${discounted} ({pct}% off)"
+        item_id = it.get("id", "")
+        shop_id = it.get("shop_id")
+        if item_id:
+            if itype == "book":
+                url = f"/sereymarket/product/{item_id}?type=book"
+            elif shop_id:
+                url = f"/sereymarket/product/{item_id}?shop_id={shop_id}"
+            else:
+                url = f"/sereymarket/product/{item_id}"
+            line = f"[{title}]({url}) ({itype}): was ${original}, now ${discounted} ({pct}% off)"
+        else:
+            line = f"{title} ({itype}): was ${original}, now ${discounted} ({pct}% off)"
         if expires:
             line += f", expires {expires}"
         else:
