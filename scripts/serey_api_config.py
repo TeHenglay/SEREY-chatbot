@@ -348,6 +348,101 @@ def transform_ai_training_data(data: dict) -> dict:
 # Step 6 transforms — additional public endpoints
 # ---------------------------------------------------------------------------
 
+def transform_featured_items(data: dict) -> dict:
+    """
+    Endpoint: GET /api/v2/sereymarket/ai-training-data  (key: "featured_items")
+    Shape:
+      featured_items.by_community[]: { community_id, items[]: {
+        position, item_type ("product"|"book"), id, title, price,
+        shop_id (null for books), discount_percentage, discount_expires_at (null = no expiry),
+        images[] } }
+      featured_items.total_communities: int
+    Field may live at top level or nested under "data".
+    """
+    inner = data.get("data") if isinstance(data, dict) else {}
+    if not isinstance(inner, dict):
+        inner = {}
+    featured = data.get("featured_items") or inner.get("featured_items") or {}
+    by_community = featured.get("by_community") or []
+    total = featured.get("total_communities", len(by_community))
+
+    lines = []
+    for comm in by_community:
+        cid = comm.get("community_id", "")
+        items = comm.get("items") or []
+        item_parts = []
+        for it in items:
+            title = it.get("title", "")
+            price = it.get("price", "")
+            itype = it.get("item_type", "item")
+            disc = it.get("discount_percentage")
+            expires = it.get("discount_expires_at")  # null means no expiry
+            disc_str = ""
+            if disc:
+                disc_str = f", {disc}% off"
+                if expires:
+                    disc_str += f" (expires {expires})"
+                else:
+                    disc_str += " (permanent discount)"
+            item_parts.append(f"{title} ({itype}, ${price}{disc_str})")
+        if item_parts:
+            lines.append(f"Community {cid}: {'; '.join(item_parts)}")
+
+    return {
+        "title": "Serey Marketplace Featured Items",
+        "content": (
+            f"Serey Marketplace features highlighted items across {total} communities. "
+            + " | ".join(lines) + "."
+            if lines else "No featured items currently available."
+        ),
+    }
+
+
+def transform_active_discounts(data: dict) -> dict:
+    """
+    Endpoint: GET /api/v2/sereymarket/ai-training-data  (key: "active_discounts")
+    Shape:
+      active_discounts.items[]: { item_type ("product"|"book"), id, title, price,
+        discounted_price (pre-calculated), shop_id, discount_percentage,
+        discount_expires_at (null = permanent), images[] }
+      active_discounts.total: int
+    Items are pre-sorted by discount_expires_at ascending (soonest expiring first).
+    Items with discount_expires_at: null are permanently discounted until manually removed.
+    Field may live at top level or nested under "data".
+    """
+    inner = data.get("data") if isinstance(data, dict) else {}
+    if not isinstance(inner, dict):
+        inner = {}
+    discounts = data.get("active_discounts") or inner.get("active_discounts") or {}
+    items = discounts.get("items") or []
+    total = discounts.get("total", len(items))
+
+    lines = []
+    for it in items:
+        title = it.get("title", "")
+        original = it.get("price", "")
+        discounted = it.get("discounted_price", "")
+        pct = it.get("discount_percentage", "")
+        expires = it.get("discount_expires_at")  # null = permanent
+        itype = it.get("item_type", "item")
+        line = f"{title} ({itype}): was ${original}, now ${discounted} ({pct}% off)"
+        if expires:
+            line += f", expires {expires}"
+        else:
+            line += ", no expiry date (permanent)"
+        lines.append(line)
+
+    return {
+        "title": "Serey Marketplace Active Discounts",
+        "content": (
+            f"There are currently {total} active discounts on Serey Marketplace, listed soonest-expiring first. "
+            + " | ".join(lines) + ". "
+            "Note: items with no expiry date are permanently discounted until manually removed."
+            if lines else "No active discounts currently available."
+        ),
+    }
+
+
 def transform_serey_apps(data) -> dict:
     """GET /api/v2/general/list-app"""
     items = data if isinstance(data, list) else (data.get("data") or data.get("apps") or [])

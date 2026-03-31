@@ -48,6 +48,8 @@ async def sync_knowledge() -> dict:
         transform_content_categories,
         transform_serey_countries,
         transform_ai_training_data,
+        transform_featured_items,
+        transform_active_discounts,
         transform_serey_apps,
         transform_marketplace_categories,
         transform_payment_methods,
@@ -256,19 +258,30 @@ async def sync_knowledge() -> dict:
             errors.append(f"serey-countries: {e}")
             logger.warning("Step 5c failed: %s", e)
 
-        # 5d. Marketplace AI training data (products + shops + FAQs curated for AI)
+        # 5d. Marketplace AI training data (products + shops + FAQs + featured items + discounts)
         try:
             r = await client.get(
                 f"{SEREY_MARKET_BASE}/api/v2/sereymarket/ai-training-data",
                 params={"page": 1, "pageSize": 50},
             )
             r.raise_for_status()
+            ai_data = r.json()
             live_chunks.append({
                 "id": "live_ai_training_data",
                 "category": "marketplace",
-                **transform_ai_training_data(r.json()),
+                **transform_ai_training_data(ai_data),
             })
-            logger.info("Step 5d: fetched AI training data.")
+            live_chunks.append({
+                "id": "live_featured_items",
+                "category": "marketplace",
+                **transform_featured_items(ai_data),
+            })
+            live_chunks.append({
+                "id": "live_active_discounts",
+                "category": "marketplace",
+                **transform_active_discounts(ai_data),
+            })
+            logger.info("Step 5d: fetched AI training data (incl. featured items + active discounts).")
         except Exception as e:
             errors.append(f"ai-training-data: {e}")
             logger.warning("Step 5d failed: %s", e)
