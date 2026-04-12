@@ -10,7 +10,8 @@ class ChatLink(BaseModel):
     """A navigable link the AI recommends — rendered as a button on the frontend."""
     label: str = Field(..., description="Display text for the button")
     url: str = Field(..., description="Full URL to navigate to")
-    type: str = Field(default="page", description="'shop' | 'product' | 'page'")
+    type: str = Field(default="page", description="'shop' | 'product' | 'page' | 'community'")
+    community_id: int | None = Field(default=None, description="Community ID for type='community' links")
 
 
 class ChatRequest(BaseModel):
@@ -43,6 +44,10 @@ class ChatRequest(BaseModel):
         default=None,
         description="Current page state snapshot sent by the frontend on every turn.",
         max_length=16000,
+    )
+    flow: str | None = Field(
+        default=None,
+        description="Named flow to activate: 'post_guide' | 'community_discovery'",
     )
 
 

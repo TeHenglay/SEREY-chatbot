@@ -202,7 +202,7 @@ def transform_communities(data: dict) -> tuple[dict, dict]:
                 dns = c.get("dns") or None
                 if cid:
                     community_map[cid] = {"title": title, "dns": dns}
-                    members.append(title)
+                    members.append(f"{title} (id: {cid})")
         if members:
             category_lines.append(f"{cat_name}: {', '.join(members)}")
 
