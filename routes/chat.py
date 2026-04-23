@@ -3,15 +3,19 @@
 # Knowledge is stored in ChromaDB — only relevant chunks are retrieved per request.
 # Uses Mem0 for per-user long-term memory and per-session context.
 
-from fastapi import APIRouter, HTTPException, Header, Depends
-from schemas.chat import ChatRequest, ChatResponse, ChatLink
-from services import gemini, memory, search
-from services.memory import append_session_turn, get_session_history_prompt
-from services.knowledge_sync import get_community_metadata
+import asyncio
 import json
-import re
 import logging
 import os
+import re
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi.responses import StreamingResponse
+
+from schemas.chat import ChatLink, ChatRequest, ChatResponse
+from services import gemini, memory, search
+from services.knowledge_sync import get_community_metadata
+from services.memory import append_session_turn, get_session_history_prompt
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -264,4 +268,158 @@ SEREY ASSISTANT:"""
         links=links,
         user_id=request.user_id,
         session_id=request.session_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Background helper — runs after the streaming response is fully sent
+# ---------------------------------------------------------------------------
+
+def _persist_turn(
+    session_id: str,
+    user_id: str,
+    user_message: str,
+    assistant_reply: str,
+) -> None:
+    try:
+        append_session_turn(
+            session_id=session_id,
+            user_message=user_message,
+            assistant_reply=assistant_reply,
+        )
+    except Exception as e:
+        logger.warning("Background: failed to append session turn: %s", e)
+    try:
+        memory.save_interaction(
+            user_id=user_id,
+            session_id=session_id,
+            content=f"User: {user_message}\nAssistant: {assistant_reply}",
+        )
+    except Exception as e:
+        logger.warning("Background: failed to save interaction: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# POST /chat/stream — SSE streaming endpoint
+# ---------------------------------------------------------------------------
+
+@router.post("/chat/stream", dependencies=[Depends(_verify_api_key)])
+async def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
+    """
+    Streaming SSE endpoint. Emits newline-delimited events:
+      data: {"type": "chunk", "text": "..."}   — progressive text tokens
+      data: {"type": "links", "links": [...]}  — final structured links
+      data: {"type": "done"}                   — stream complete
+      data: {"type": "error", "message": "..."} — on failure
+    """
+    # Steps 1 + 2 run in parallel — both are independent ChromaDB queries.
+    relevant_knowledge, long_term_memory = await asyncio.gather(
+        asyncio.to_thread(search.search_serey_knowledge, request.message, 8),
+        asyncio.to_thread(memory.get_user_preferences, request.user_id, request.message),
+    )
+
+    session_history = get_session_history_prompt(request.session_id)
+
+    history_section = (
+        f"CONVERSATION HISTORY (this session — use this to recall what the user told you):\n{session_history}"
+        if session_history
+        else "CONVERSATION HISTORY: (no prior turns in this session)"
+    )
+
+    flow_section = ""
+    if request.flow and request.flow in _FLOW_PROMPTS:
+        flow_section = f"\n---\n{_FLOW_PROMPTS[request.flow]}"
+
+    full_prompt = f"""{SEREY_SYSTEM_PROMPT}{flow_section}
+
+---
+
+RELEVANT KNOWLEDGE (retrieved for this question):
+{relevant_knowledge}
+
+---
+
+USER LONG-TERM PREFERENCES (from previous sessions):
+{long_term_memory}
+
+{history_section}
+
+---
+
+USER: {request.message}
+
+SEREY ASSISTANT:"""
+
+    async def event_stream():
+        accumulated = ""          # rolling buffer of text NOT yet emitted
+        links_marker_found = False
+        final_reply = ""          # clean text to persist after stream ends
+
+        try:
+            async for chunk_text in gemini.stream_text(full_prompt):
+                accumulated += chunk_text
+
+                if not links_marker_found:
+                    marker_pos = accumulated.find("##LINKS##")
+                    if marker_pos == -1:
+                        # Hold back last 8 chars to guard against split markers.
+                        # "##LINKS##" is 9 chars, so 8-char holdback is sufficient.
+                        safe_end = max(0, len(accumulated) - 8)
+                        to_emit = accumulated[:safe_end]
+                        if to_emit:
+                            final_reply += to_emit
+                            accumulated = accumulated[safe_end:]
+                            yield f"data: {json.dumps({'type': 'chunk', 'text': to_emit})}\n\n"
+                    else:
+                        text_before = accumulated[:marker_pos]
+                        if text_before:
+                            final_reply += text_before
+                            yield f"data: {json.dumps({'type': 'chunk', 'text': text_before})}\n\n"
+                        links_marker_found = True
+                        # accumulated now holds "##LINKS##..." tail; keep appending silently
+
+        except Exception as e:
+            logger.error("Gemini stream error: %s", str(e))
+            yield f"data: {json.dumps({'type': 'error', 'message': 'AI service error'})}\n\n"
+            return
+
+        # Flush any held-back text if no links block appeared
+        if not links_marker_found:
+            remaining = accumulated.strip()
+            if remaining:
+                final_reply += remaining
+                yield f"data: {json.dumps({'type': 'chunk', 'text': remaining})}\n\n"
+
+        # Parse ##LINKS## block from accumulated tail
+        _, links = _extract_links(accumulated if links_marker_found else "")
+
+        community_meta = get_community_metadata()
+        for link in links:
+            if link.type == "community" and link.community_id:
+                meta = community_meta.get(link.community_id)
+                if meta and meta.get("avatar"):
+                    link.image = meta["avatar"]
+
+        if links:
+            yield f"data: {json.dumps({'type': 'links', 'links': [l.model_dump() for l in links]})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        # Schedule persistence after the response is fully sent
+        background_tasks.add_task(
+            _persist_turn,
+            request.session_id,
+            request.user_id,
+            request.message,
+            final_reply,
+        )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
