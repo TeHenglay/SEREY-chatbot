@@ -88,11 +88,10 @@ SEREY_KNOWLEDGE = [
             "Without an eligible subscription plan, the option to open a shop will not be available. "
             "To upgrade or check your subscription plan, visit /social-media-owners/buy-serey-coins. "
             "Once you have an eligible plan, follow these steps: "
-            "1. Register or log into your Serey account via the login modal. "
-            "2. Complete your payment setup at /sereymarket/payment-setup. "
-            "3. Fill in your shop name, category, and contact info. "
-            "4. Upload your first product listing with photos and a price at /sereymarket/myproduct. "
-            "5. Your shop goes live immediately after review. "
+            "1. Complete your payment setup at /sereymarket/payment-setup. "
+            "2. Fill in your shop name, category, and contact info. "
+            "3. Upload your first product listing with photos and a price at /sereymarket/myproduct. "
+            "4. Your shop goes live immediately after review. "
             "Sellers can manage orders at /sereymarket/myorder."
         ),
     },
@@ -110,11 +109,9 @@ SEREY_KNOWLEDGE = [
             "/blog/new — New blog posts. "
             "/blog/trending — Trending blog posts. "
             "/blog/post/new — Create a post. "
-            "/blog/post/new-premium — Create a premium post (community owners only, requires premium feature enabled on the community). "
             "/blog/post/edit — Edit a post. "
             "/blog/post/draft — Draft posts. "
             "/blog/categories/[[...slug]] — Category/nested pages. "
-            "/blog-premium/new — Premium blog creation (community owners only, requires premium feature enabled on the community). "
             "/sereymarket — Main marketplace hub. "
             "/sereymarket/category — Marketplace category page. "
             "/sereymarket/shop — Shop directory. "
@@ -175,7 +172,7 @@ SEREY_KNOWLEDGE = [
             "/social-media-owners/buy-serey-coins — Buy Serey coins for owners. "
             "/social-media-owners/temp-buy-coins — Temporary buy coins. "
             "/cambodia — Cambodia community. "
-            "/cambodia/serey-ai — Cambodia AI page. "
+            "/cambodia/serey-ai — Serey AI tools page (this is a page, NOT a community). "
             "/usa — USA community. "
             "/usa/sport — USA sports. "
             "/netherlands — Netherlands community. "
@@ -192,7 +189,7 @@ SEREY_KNOWLEDGE = [
             "/smartvey/who-we-are — Smartvey company info. "
             "/serey-link — Serey Link. "
             "/serey-wallet — Serey Wallet. "
-            "/serey-apps — Serey Apps. "
+            "/serey-apps — Serey Apps listing page (this is a page, NOT a community). "
             "/pdoge — Pdoge landing. "
             "/pdoge/about-us — Pdoge about. "
             "/pdoge/donate — Pdoge donation. "
@@ -460,14 +457,13 @@ SEREY_KNOWLEDGE = [
         ),
     },
     {
-        "id": "soriya_identity",
+        "id": "serey_guide_bot_identity",
         "category": "about",
-        "title": "Who is Soriya?",
+        "title": "Who is Serey guide bot?",
         "content": (
-            "Soriya is the official AI assistant of the Serey platform. "
-            "She is a helpful Cambodian woman designed to guide users through the Serey marketplace, "
-            "help them find shops, products, and navigate the various features of the platform. "
-            "Her name, Soriya (សុរិយា), means 'sun' in Khmer, representing warmth and guidance."
+            "Serey guide bot is the official AI assistant of the Serey platform. "
+            "It is designed to guide users through the Serey marketplace, "
+            "help them find shops, products, and navigate the various features of the platform."
         ),
     },
     {

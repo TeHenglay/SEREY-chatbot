@@ -12,6 +12,7 @@ class ChatLink(BaseModel):
     url: str = Field(..., description="Full URL to navigate to")
     type: str = Field(default="page", description="'shop' | 'product' | 'page' | 'community'")
     community_id: int | None = Field(default=None, description="Community ID for type='community' links")
+    image: str | None = Field(default=None, description="Avatar/icon URL for the community")
 
 
 class ChatRequest(BaseModel):

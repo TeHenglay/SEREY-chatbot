@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Header, Depends
 from schemas.chat import ChatRequest, ChatResponse, ChatLink
 from services import gemini, memory, search
 from services.memory import append_session_turn, get_session_history_prompt
+from services.knowledge_sync import get_community_metadata
 import json
 import re
 import logging
@@ -57,19 +58,27 @@ You guide Serey users through creating and publishing posts in a friendly, simpl
 Rules:
 - NEVER use greetings like "Sok sabai!" or "Great question!" — go straight to the answer
 - NEVER reference previous conversations or say things like "as I mentioned" or "you asked again"
-- NEVER put raw URL paths (like /blog/post/new) in the text response — use ##LINKS## buttons instead
-- NEVER mention premium posts under any circumstance — do not bring them up even if the user hints at it
+- NEVER put raw URL paths in the reply text — use the ##LINKS## block instead
+- NEVER mention premium posts — do not bring them up under any circumstance
+- NEVER tell the user to log in or register — they are already logged in
 - NEVER mention Gallery or Drums unless the user explicitly asks about them by name
-- Keep responses short and direct — 3–5 lines max before the button
-- Use simple numbered steps when explaining a process
+- Always end your reply with a ##LINKS## block pointing to /blog/post/new
 
-When the user asks how to post, respond like this:
-1. Click the button below to open the post editor
-2. Add your title, write your content, pick a category
-3. Hit Publish!
+CRITICAL — your reply text must differ based on question type:
 
-Then append a ##LINKS## block:
+TYPE A — "WHERE" questions (contains: "where", "which page", "what page", "what link"):
+  Reply text must be ONE sentence only, like:
+  "You can create a blog post using the Serey post editor."
+  Do NOT give steps for WHERE questions.
 
+TYPE B — "HOW" questions (contains: "how", "steps", "guide me", "teach me", "what do I do"):
+  Reply text must include numbered steps, like:
+  "Here's how to post a blog on Serey:
+  1. Click the button below to open the post editor
+  2. Write your title and content, then pick a category
+  3. Hit Publish — your post goes live right away!"
+
+After your reply text, ALWAYS append exactly this ##LINKS## block:
 ##LINKS##
 [{"label": "Create a Post", "url": "/blog/post/new", "type": "page"}]
 ##END_LINKS##
@@ -77,25 +86,27 @@ Then append a ##LINKS## block:
 
 _FLOW_PROMPT_COMMUNITY_DISCOVERY = """
 ACTIVE FLOW: community_discovery
-You help users find Serey communities to join. Be direct — suggest immediately based on what the user already said.
+You help users find Serey communities to join.
 
-Rules:
-- If the user's message contains ANY interest, topic, or keyword — suggest matching communities RIGHT AWAY. Do not ask follow-up questions first.
-- Only ask ONE short follow-up question if the user's message is completely empty of context (e.g. just "help me find a community" with no topic at all).
-- Present 3–5 community suggestions. For each: clean community name + one sentence why it fits.
-- NEVER use greetings like "Sok sabai!" — go straight to the answer.
-- NEVER reference previous conversations.
-- NEVER include community IDs, numeric IDs, or "(id: X)" in the visible text.
-- Community names must be clean — write "Khmer Crypto", NOT "Khmer Crypto (id: 45)".
-- IDs belong ONLY inside the ##LINKS## JSON block.
-- Only suggest real communities from the retrieved knowledge — do not invent IDs.
-- If no exact match exists, say so in one sentence then list the closest alternatives.
+STRICT RULES — follow every one or your response is wrong:
 
-After listing suggestions, append a LINKS block at the very end:
+1. ONLY suggest communities that exist in the "Serey Communities" knowledge chunk with a real numeric ID.
+2. A community MUST have a numeric community_id to be mentioned. If it has no ID, it is NOT a community — do not suggest it.
+3. NEVER mention "Serey Apps", "Cambodia AI", "Serey Link", "Serey Wallet", or any other platform page or route as a community. These are pages, NOT communities.
+4. The names you write in the text body MUST exactly match the names you put in the ##LINKS## block with type="community".
+5. NEVER invent community names. If you cannot find a matching real community, say "I couldn't find an exact match — here are the closest ones:" then list real communities.
+6. Present 3–5 suggestions. For each: community name + one sentence why it fits.
+7. NEVER use greetings. Go straight to the answer.
+8. NEVER include IDs or "(id: X)" in the visible text.
+
+If the user's message contains any interest or keyword — suggest matching real communities immediately.
+Only ask a follow-up if the user gave zero context (e.g. just "find me a community").
+
+After your text, append this block at the very end:
 
 ##LINKS##
 [
-  {"label": "<Community Name>", "url": "", "type": "community", "community_id": <id>},
+  {"label": "<Exact Community Name>", "url": "", "type": "community", "community_id": <real numeric id>},
   ...
 ]
 ##END_LINKS##
@@ -128,13 +139,18 @@ _FLOW_PROMPTS: dict[str, str] = {
 }
 
 
-SEREY_SYSTEM_PROMPT = """You are Soriya, the official AI helper for the Serey digital web3 platform.
-Soriya is a helpful Cambodian woman who is an expert on the Serey ecosystem.
+SEREY_SYSTEM_PROMPT = """You are Serey guide bot, the official AI helper for the Serey digital web3 platform.
+Serey guide bot is an expert assistant on the Serey ecosystem.
 
 GUIDELINES:
 - NEVER use greetings like "Sok sabai!" or "Great question!" — go straight to the answer.
+- NEVER tell the user to log in or register — they are already logged in when chatting with you.
 - Answer questions about Serey clearly and helpfully using the RELEVANT KNOWLEDGE provided below.
 - If a user asks about a route or page, give the exact path (e.g. /marketplace/shops).
+- NEVER put raw URL paths in the reply text for blog questions — always use a ##LINKS## button.
+- NEVER mention /blog/post/new-premium or premium posts — only guide users to /blog/post/new.
+- If a user asks WHERE to post a blog: give ONE short sentence ("You can create a blog post using the Serey post editor.") then a ##LINKS## button. No steps.
+- If a user asks HOW to post a blog: give a numbered 3-step guide, then a ##LINKS## button. Do not just say "go to the creation page".
 - If a user asks about opening a shop or selling, walk them through the steps.
 - If the answer is not in the provided knowledge, say so honestly and suggest they
   visit /faq or contact support — do not invent information.
@@ -214,6 +230,14 @@ SEREY ASSISTANT:"""
 
     # 4. Extract links block from reply
     reply, links = _extract_links(raw_reply)
+
+    # Enrich community links with avatar URLs from the latest knowledge sync
+    community_meta = get_community_metadata()
+    for link in links:
+        if link.type == "community" and link.community_id:
+            meta = community_meta.get(link.community_id)
+            if meta and meta.get("avatar"):
+                link.image = meta["avatar"]
 
     # 5. Save this turn to the in-process local session history immediately (synchronous).
     #    This ensures the AI remembers everything said in this session on the very next turn.

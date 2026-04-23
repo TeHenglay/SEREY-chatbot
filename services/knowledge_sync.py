@@ -29,6 +29,14 @@ _CHROMA_PATH = os.path.normpath(
 )
 sys.path.append(os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
 
+# Community metadata populated on every sync — used by chat.py to enrich link avatars
+_community_metadata: dict[int, dict] = {}
+
+
+def get_community_metadata() -> dict[int, dict]:
+    """Return the latest community map: {community_id: {title, dns, avatar}}."""
+    return _community_metadata
+
 
 async def sync_knowledge() -> dict:
     """
@@ -79,6 +87,8 @@ async def sync_knowledge() -> dict:
                 "category": "platform",
                 **comm_chunk,
             })
+            _community_metadata.clear()
+            _community_metadata.update(community_map)
             logger.info("Step 0: fetched %d active communities.", len(community_map))
         except Exception as e:
             errors.append(f"community-list: {e}")

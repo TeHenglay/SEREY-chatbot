@@ -200,8 +200,9 @@ def transform_communities(data: dict) -> tuple[dict, dict]:
                 cid = c.get("id")
                 title = c.get("title", "")
                 dns = c.get("dns") or None
+                avatar = c.get("icon_url") or c.get("logo_url") or None
                 if cid:
-                    community_map[cid] = {"title": title, "dns": dns}
+                    community_map[cid] = {"title": title, "dns": dns, "avatar": avatar}
                     members.append(f"{title} (id: {cid})")
         if members:
             category_lines.append(f"{cat_name}: {', '.join(members)}")
