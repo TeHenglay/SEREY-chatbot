@@ -102,9 +102,8 @@ SEREY_KNOWLEDGE = [
         "content": (
             "Key pages and routes on the Serey platform: "
             "/ — Home page. "
-            "/feed — Main feed page. "
+            "/feed — Blog feed and main feed page. "
             "/blog — Blog landing page. "
-            "/blog/feed — Blog feed. "
             "/blog/hot — Hot blog posts. "
             "/blog/new — New blog posts. "
             "/blog/trending — Trending blog posts. "
