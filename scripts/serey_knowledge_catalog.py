@@ -86,7 +86,7 @@ SEREY_KNOWLEDGE = [
         "content": (
             "To open a shop on Serey, you must first ensure your platform has a subscription plan that includes the shop/marketplace feature. "
             "Without an eligible subscription plan, the option to open a shop will not be available. "
-            "To upgrade or check your subscription plan, visit /social-media-owners/buy-serey-coins. "
+            "To buy or upgrade a community subscription plan, visit /social-media-owners (labelled 'Buy a Plan'). "
             "Once you have an eligible plan, follow these steps: "
             "1. Complete your payment setup at /sereymarket/payment-setup. "
             "2. Fill in your shop name, category, and contact info. "
@@ -102,7 +102,7 @@ SEREY_KNOWLEDGE = [
         "content": (
             "Key pages and routes on the Serey platform: "
             "/ — Home page. "
-            "/feed — Blog feed and main feed page. "
+            "/feed — Feed page (call it 'Feed', never 'Main Feed'). "
             "/blog — Blog landing page. "
             "/blog/hot — Hot blog posts. "
             "/blog/new — New blog posts. "
@@ -168,8 +168,7 @@ SEREY_KNOWLEDGE = [
             "/quiz/admin/setting — Quiz admin settings. "
             "/social-media-owners — Community manager/owner tools. "
             "/social-media-owners/community-settings — Community settings. "
-            "/social-media-owners/buy-serey-coins — Buy Serey coins for owners. "
-            "/social-media-owners/temp-buy-coins — Temporary buy coins. "
+            "/social-media-owners — Buy a community subscription plan and manage owner tools. "
             "/cambodia — Cambodia community. "
             "/cambodia/serey-ai — Serey AI tools page (this is a page, NOT a community). "
             "/usa — USA community. "
