@@ -6,7 +6,7 @@
 from fastapi import APIRouter, HTTPException, Header, Depends
 from schemas.chat import ChatRequest, BuilderChatResponse, UploadNeeded
 from schemas.blueprint import PageBlueprint, SectionBlock, PatchCommand
-from services import gemini
+from services import grok
 from services.memory import append_session_turn, get_session_history_prompt
 import json
 import logging
@@ -265,12 +265,12 @@ USER: {request.message}
 Respond with valid JSON now:
 """
 
-    # 3. Call Gemini — retry once on malformed JSON
+    # 3. Call Grok — retry once on malformed JSON
     data = None
     for attempt in (1, 2):
         raw_response = ""
         try:
-            raw_response = gemini.generate(full_prompt)
+            raw_response = grok.generate(full_prompt)
             data = json.loads(raw_response)
             break
         except json.JSONDecodeError as e:
@@ -278,7 +278,7 @@ Respond with valid JSON now:
             if attempt == 2:
                 raise HTTPException(status_code=422, detail=f"AI returned malformed JSON after retry: {str(e)}")
         except Exception as e:
-            logger.error("Gemini error (attempt %d): %s", attempt, str(e))
+            logger.error("Grok error (attempt %d): %s", attempt, str(e))
             if attempt == 2:
                 raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
     if data is None:

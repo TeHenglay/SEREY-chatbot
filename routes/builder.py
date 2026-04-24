@@ -5,7 +5,7 @@
 from fastapi import APIRouter, HTTPException
 from schemas.requests import BuilderRequest
 from schemas.blueprint import PageBlueprint
-from services import gemini, memory
+from services import grok, memory
 import json
 import logging
 
@@ -94,11 +94,11 @@ USER REQUEST:
 Generate the JSON blueprint now:
 """
 
-    # 3. Call Gemini
+    # 3. Call Grok
     try:
-        raw_json = gemini.generate(full_prompt)
+        raw_json = grok.generate(full_prompt)
     except Exception as e:
-        logger.error("Gemini API error: %s", str(e))
+        logger.error("Grok API error: %s", str(e))
         raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
 
     # 4. Parse and validate

@@ -13,7 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from schemas.chat import ChatLink, ChatRequest, ChatResponse
-from services import gemini, memory, search
+from services import grok, memory, search
 from services.knowledge_sync import get_community_metadata
 from services.memory import append_session_turn, get_session_history_prompt
 
@@ -99,6 +99,7 @@ STRICT RULES — follow every one or your response is wrong:
 3. NEVER mention "Serey Apps", "Cambodia AI", "Serey Link", "Serey Wallet", or any other platform page or route as a community. These are pages, NOT communities.
 4. The names you write in the text body MUST exactly match the names you put in the ##LINKS## block with type="community".
 5. NEVER invent community names. If you cannot find a matching real community, say "I couldn't find an exact match — here are the closest ones:" then list real communities.
+6. NEVER append the word "Community" to a community name. Use the exact name as it appears in the knowledge base — no suffixes, no additions.
 6. Present 3–5 suggestions. For each: community name + one sentence why it fits.
 7. NEVER use greetings. Go straight to the answer.
 8. NEVER include IDs or "(id: X)" in the visible text.
@@ -118,21 +119,30 @@ After your text, append this block at the very end:
 
 _FLOW_PROMPT_WRITING_REVIEW = """
 ACTIVE FLOW: writing_review
-You are a strict writing editor for Serey blog posts.
-When given an article draft, you MUST:
-1. List grammar errors — quote the exact wrong phrase, then show the correction
-2. Flag paragraphs that are too long (>5 sentences) or too short (<2 sentences)
-3. Flag unclear or confusing sentences
-4. Note missing structure (no intro, no conclusion, abrupt ending)
-5. Give an overall readability score (Easy / Medium / Hard)
+
+CRITICAL INSTRUCTION — READ THIS FIRST:
+Look at the user's message word by word. Decide which of the two modes below applies, then follow ONLY that mode. Do NOT mix modes.
+
+MODE 1 — SUMMARY / MEANING (use this mode when the user asks what the text is about)
+  Trigger words: "what is it about", "what is the paragraph about", "what is this about", "summarize", "what does it say", "explain", "what is the topic", "what is the main idea"
+  → If the user's message matches any of the above: write 2–3 sentences summarizing the main topic and theme of the text. Do NOT mention grammar, paragraph length, structure, or readability. Do NOT do a writing review.
+
+MODE 2 — WRITING REVIEW (use this mode only when the user asks for feedback on the writing itself)
+  Trigger words: "review", "check", "fix", "improve", "feedback", "edit", "grammar", "how is my writing", "is it good"
+  → If the user's message matches any of the above: do a full writing analysis:
+    1. Grammar errors — quote the exact wrong phrase, then show the correction
+    2. Paragraph length issues (>5 sentences is too long, <2 is too short)
+    3. Unclear or confusing sentences
+    4. Missing structure (no intro, no conclusion, abrupt ending)
+    5. Overall readability score: Easy / Medium / Hard
+    Format as a bullet list. End with 1–2 sentences of encouragement.
 
 Rules:
+- NEVER mix modes. If the user asks what the paragraph is about — give a summary only, not a review.
 - NEVER ask what topic the user wants to write about
 - NEVER suggest different topics
-- ONLY analyze the text provided
-- If no text is provided, say "Please write something first"
-- Format your response as a bullet list of specific issues
-- End with 1–2 sentences of encouragement
+- ONLY discuss the text provided in the page context or message
+- If no text is provided, say "Please write something in the editor first so I can help."
 - Do not append a ##LINKS## block for this flow.
 """
 
@@ -180,6 +190,7 @@ Rules for the LINKS block:
 - Do NOT add it for fully general answers with no specific destination.
 - The JSON must be a valid array — no trailing commas.
 - NEVER include community IDs in the visible text — IDs belong only inside this JSON block.
+- NEVER append the word "Community" to a community name. Use the exact name from the knowledge base as-is — no suffixes.
 """
 
 
@@ -207,6 +218,15 @@ async def chat(request: ChatRequest):
     if request.flow and request.flow in _FLOW_PROMPTS:
         flow_section = f"\n---\n{_FLOW_PROMPTS[request.flow]}"
 
+    page_context_section = ""
+    if request.page_context and request.page_context.strip():
+        page_context_section = f"""
+---
+
+CURRENT PAGE CONTENT (the text the user is writing — use this to answer their question):
+{request.page_context.strip()}
+"""
+
     full_prompt = f"""{SEREY_SYSTEM_PROMPT}{flow_section}
 
 ---
@@ -220,18 +240,18 @@ USER LONG-TERM PREFERENCES (from previous sessions):
 {long_term_memory}
 
 {history_section}
-
+{page_context_section}
 ---
 
 USER: {request.message}
 
 SEREY ASSISTANT:"""
 
-    # 3. Call Gemini (plain text mode)
+    # 3. Call Grok (plain text mode)
     try:
-        raw_reply = gemini.generate_text(full_prompt)
+        raw_reply = grok.generate_text(full_prompt)
     except Exception as e:
-        logger.error("Gemini chat error: %s", str(e))
+        logger.error("Grok chat error: %s", str(e))
         raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
 
     # 4. Extract links block from reply
@@ -330,6 +350,15 @@ async def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
     if request.flow and request.flow in _FLOW_PROMPTS:
         flow_section = f"\n---\n{_FLOW_PROMPTS[request.flow]}"
 
+    page_context_section = ""
+    if request.page_context and request.page_context.strip():
+        page_context_section = f"""
+---
+
+CURRENT PAGE CONTENT (the text the user is writing — use this to answer their question):
+{request.page_context.strip()}
+"""
+
     full_prompt = f"""{SEREY_SYSTEM_PROMPT}{flow_section}
 
 ---
@@ -343,7 +372,7 @@ USER LONG-TERM PREFERENCES (from previous sessions):
 {long_term_memory}
 
 {history_section}
-
+{page_context_section}
 ---
 
 USER: {request.message}
@@ -356,7 +385,7 @@ SEREY ASSISTANT:"""
         final_reply = ""          # clean text to persist after stream ends
 
         try:
-            async for chunk_text in gemini.stream_text(full_prompt):
+            async for chunk_text in grok.stream_text(full_prompt):
                 accumulated += chunk_text
 
                 if not links_marker_found:
@@ -379,7 +408,7 @@ SEREY ASSISTANT:"""
                         # accumulated now holds "##LINKS##..." tail; keep appending silently
 
         except Exception as e:
-            logger.error("Gemini stream error: %s", str(e))
+            logger.error("Grok stream error: %s", str(e))
             yield f"data: {json.dumps({'type': 'error', 'message': 'AI service error'})}\n\n"
             return
 

@@ -96,8 +96,8 @@ def health_check():
 
 @app.get("/ready")
 def readiness_check():
-    """Checks that ChromaDB is indexed and Gemini is reachable before serving requests."""
-    from services.gemini import test_connection
+    """Checks that ChromaDB is indexed and Grok is reachable before serving requests."""
+    from services.grok import test_connection
     from services.search import get_all_component_names
 
     try:
@@ -108,7 +108,7 @@ def readiness_check():
         return JSONResponse(status_code=503, content={"ready": False, "reason": f"ChromaDB error: {str(e)}"})
 
     if not test_connection():
-        return JSONResponse(status_code=503, content={"ready": False, "reason": "Gemini connection failed. Check GOOGLE_API_KEY."})
+        return JSONResponse(status_code=503, content={"ready": False, "reason": "Grok connection failed. Check GROK_API_KEY."})
 
     return {"ready": True}
 
