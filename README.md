@@ -206,6 +206,15 @@ curl -X POST http://localhost:8000/api/builder/chat \
   }'
 ```
 
+Response contract highlights for `POST /api/builder/chat`:
+
+- `sections_used`: visible section types (lowercase) in final layout order.
+- `sections_hidden`: hidden section types (lowercase) in final layout order.
+- `styles_selected`: final style state per section (`section`, `style`, `is_hidden`, optional `style_reason`).
+- `color_tokens`: backend policy-selected palette (`site_type`, `palette_family`, `title`, `accent`, `body`, `bg`, `subtitle`, `accent_usage_max`).
+- `uploads_needed`: server-derived upload prompts based on final visible layout + style.
+  Hidden sections and non-image styles (for example ABOUT style 5/6/8) are excluded.
+
 ### 4) Manual Knowledge Sync (admin)
 
 ```bash

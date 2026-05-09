@@ -15,6 +15,7 @@ _api_key = os.getenv("GROK_API_KEY")
 # xAI Grok API endpoint (OpenAI-compatible)
 _GROK_BASE_URL = "https://api.x.ai/v1"
 _GROK_MODEL = "grok-3-mini"
+_GROK_BUILDER_MODEL = "grok-3"
 
 # Module-level cached client instances
 _client: OpenAI | None = None
@@ -57,6 +58,27 @@ def generate(prompt: str) -> str:
         except Exception as e:
             if attempt == 0:
                 logger.warning("Grok attempt 1 failed (%s), retrying in 2s...", str(e))
+                time.sleep(2)
+            else:
+                raise
+
+
+def generate_builder(prompt: str) -> str:
+    """Send a prompt to Grok using the builder model and return raw JSON text."""
+    client = _get_client()
+    for attempt in range(2):
+        try:
+            response = client.chat.completions.create(
+                model=_GROK_BUILDER_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+            )
+            if not response.choices[0].message.content:
+                raise ValueError("Grok returned empty response")
+            return response.choices[0].message.content
+        except Exception as e:
+            if attempt == 0:
+                logger.warning("Grok builder attempt 1 failed (%s), retrying in 2s...", str(e))
                 time.sleep(2)
             else:
                 raise

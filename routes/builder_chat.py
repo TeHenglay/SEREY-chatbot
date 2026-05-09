@@ -3,14 +3,24 @@
 # The AI responds with a text reply AND an updated PageBlueprint (or null if not applicable).
 # The blueprint matches the V2 API contract: { community_id, content: [...sections] }
 
+from copy import deepcopy
 from fastapi import APIRouter, HTTPException, Header, Depends
 from schemas.chat import ChatRequest, BuilderChatResponse, UploadNeeded
-from schemas.blueprint import PageBlueprint, SectionBlock, PatchCommand
+from schemas.blueprint import PageBlueprint, PatchCommand
 from services import grok
+from services.layout_policy import (
+    collect_rendered_upload_slots,
+    compare_with_backend_map,
+    derive_uploads_needed,
+    normalize_section_type,
+    normalize_style,
+    parse_frontend_style_map,
+)
 from services.memory import append_session_turn, get_session_history_prompt
 import json
 import logging
 import os
+from typing import Any
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -21,6 +31,161 @@ _CHAT_API_KEY = os.getenv("CHAT_API_KEY", "")
 def _verify_api_key(x_serey_api_key: str = Header(default="")) -> None:
     if _CHAT_API_KEY and x_serey_api_key != _CHAT_API_KEY:
         raise HTTPException(status_code=403, detail="Forbidden: invalid API key")
+
+
+def _parse_page_context_json(page_context: str | None) -> dict[str, Any] | None:
+    if not page_context:
+        return None
+    try:
+        parsed = json.loads(page_context)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _normalize_section_styles(layout_sections: list[dict[str, Any]]) -> None:
+    for section in layout_sections:
+        section_type = normalize_section_type(section.get("type"))
+        if not section_type:
+            continue
+        style, changed = normalize_style(section_type, section.get("style"))
+        if changed:
+            logger.warning(
+                "Adjusted invalid style for section=%s from=%s to=%s based on backend canonical map",
+                section_type,
+                section.get("style"),
+                style,
+            )
+        section["type"] = section_type
+        section["style"] = style
+        section["is_hidden"] = bool(section.get("is_hidden", False))
+
+
+def _extract_style_reasons(raw_blueprint: Any, raw_patches: Any) -> dict[str, str]:
+    reasons: dict[str, str] = {}
+    if isinstance(raw_blueprint, dict):
+        for section in raw_blueprint.get("content", []) or []:
+            if not isinstance(section, dict):
+                continue
+            reason = section.get("style_reason")
+            section_type = normalize_section_type(section.get("type"))
+            if section_type and isinstance(reason, str) and reason.strip():
+                reasons[section_type] = reason.strip()
+    if isinstance(raw_patches, list):
+        for patch in raw_patches:
+            if not isinstance(patch, dict):
+                continue
+            top_reason = patch.get("style_reason")
+            section_type = normalize_section_type(patch.get("type"))
+            if section_type and isinstance(top_reason, str) and top_reason.strip():
+                reasons[section_type] = top_reason.strip()
+            updates = patch.get("updates")
+            if not isinstance(updates, dict):
+                continue
+            reason = updates.get("style_reason")
+            if section_type and isinstance(reason, str) and reason.strip():
+                reasons[section_type] = reason.strip()
+    return reasons
+
+
+def _apply_patches_to_layout(
+    content: list[dict[str, Any]],
+    patches: list[PatchCommand],
+) -> list[dict[str, Any]]:
+    layout = [deepcopy(s) for s in content if isinstance(s, dict)]
+    _normalize_section_styles(layout)
+    for patch in patches:
+        patch_type = normalize_section_type(patch.type)
+        if not patch_type:
+            continue
+        action = patch.action
+        if action == "delete_block":
+            layout = [s for s in layout if normalize_section_type(s.get("type")) != patch_type]
+            continue
+        if action == "add_block":
+            new_section = {"type": patch_type, **deepcopy(patch.updates)}
+            layout.append(new_section)
+            _normalize_section_styles(layout[-1:])
+            continue
+        if action == "update_block":
+            target = next((s for s in layout if normalize_section_type(s.get("type")) == patch_type), None)
+            if target is None:
+                target = {"type": patch_type}
+                layout.append(target)
+            target.update(deepcopy(patch.updates))
+            _normalize_section_styles([target])
+    return layout
+
+
+def _derive_final_layout(
+    blueprint: PageBlueprint | None,
+    patches: list[PatchCommand] | None,
+    page_context_obj: dict[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    if blueprint is not None:
+        content = blueprint.model_dump().get("content", [])
+        if isinstance(content, list):
+            layout = [s for s in content if isinstance(s, dict)]
+            _normalize_section_styles(layout)
+            return layout
+        return None
+    if not patches:
+        return None
+    if not isinstance(page_context_obj, dict):
+        return None
+    existing = page_context_obj.get("content")
+    if not isinstance(existing, list):
+        return None
+    return _apply_patches_to_layout(existing, patches)
+
+
+def _validate_ai_uploads_against_layout(raw_uploads: Any, final_layout: list[dict[str, Any]] | None) -> None:
+    if not isinstance(raw_uploads, list) or final_layout is None:
+        return
+    rendered_slots = {
+        (
+            slot["section"],
+            slot["field"],
+            slot.get("index"),
+        )
+        for slot in collect_rendered_upload_slots(final_layout)
+    }
+    for raw in raw_uploads:
+        if not isinstance(raw, dict):
+            logger.warning("Rejected uploads_needed entry with invalid shape: %s", raw)
+            continue
+        raw_index = raw.get("index")
+        if raw_index is not None:
+            try:
+                raw_index = int(raw_index)
+            except (TypeError, ValueError):
+                raw_index = None
+        slot_key = (str(raw.get("section", "")).lower(), str(raw.get("field", "")), raw_index)
+        if slot_key not in rendered_slots:
+            logger.warning("Rejected non-rendered uploads_needed entry from AI: %s", raw)
+
+
+def _styles_selected_from_layout(
+    final_layout: list[dict[str, Any]] | None,
+    style_reasons: dict[str, str],
+) -> list[dict[str, Any]] | None:
+    if final_layout is None:
+        return None
+    styles_selected: list[dict[str, Any]] = []
+    for section in final_layout:
+        section_type = normalize_section_type(section.get("type"))
+        if not section_type:
+            continue
+        entry = {
+            "section": section_type.lower(),
+            "style": int(section.get("style", 1)),
+            "is_hidden": bool(section.get("is_hidden", False)),
+        }
+        reason = style_reasons.get(section_type)
+        if reason:
+            entry["style_reason"] = reason
+        styles_selected.append(entry)
+    return styles_selected
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +412,11 @@ async def builder_chat(request: ChatRequest):
         if request.page_context
         else "== CURRENT PAGE STATE: (no page context provided) =="
     )
+    page_context_obj = _parse_page_context_json(request.page_context)
+    frontend_style_map = parse_frontend_style_map(page_context_obj)
+    if frontend_style_map:
+        for mismatch in compare_with_backend_map(frontend_style_map):
+            logger.warning("Frontend style map mismatch: %s", mismatch)
 
     full_prompt = f"""{BUILDER_SYSTEM_PROMPT}
 
@@ -270,7 +440,7 @@ Respond with valid JSON now:
     for attempt in (1, 2):
         raw_response = ""
         try:
-            raw_response = grok.generate(full_prompt)
+            raw_response = grok.generate_builder(full_prompt)
             data = json.loads(raw_response)
             break
         except json.JSONDecodeError as e:
@@ -298,6 +468,18 @@ Respond with valid JSON now:
     def _normalize_blueprint(raw: dict) -> dict:
         """Fix common AI field name mismatches before Pydantic validation."""
         for section in raw.get("content", []):
+            section_type = normalize_section_type(section.get("type"))
+            if section_type:
+                section["type"] = section_type
+            style, style_changed = normalize_style(section_type, section.get("style"))
+            if style_changed:
+                logger.warning(
+                    "Adjusted invalid blueprint style for section=%s from=%s to=%s based on backend canonical map",
+                    section_type,
+                    section.get("style"),
+                    style,
+                )
+            section["style"] = style
             # Gallery images: normalize field names + ensure name/description exist
             for img in section.get("images", []) or []:
                 if "url" in img and "image_url" not in img:
@@ -321,28 +503,19 @@ Respond with valid JSON now:
 
     # 5. Validate blueprint (if present)
     blueprint = None
-    blueprint_failed = False
     if raw_blueprint:
         try:
             blueprint = PageBlueprint(**_normalize_blueprint(raw_blueprint))
         except Exception as e:
-            blueprint_failed = True
             logger.error("Blueprint validation failed: %s | Data: %s", str(e), raw_blueprint)
             raise HTTPException(
                 status_code=422,
                 detail=f"AI returned invalid blueprint structure: {str(e)}",
             )
 
-    # 6. Validate uploads_needed — only keep if blueprint/patches succeeded
-    uploads_needed = None
-    if not blueprint_failed and raw_uploads and isinstance(raw_uploads, list):
-        try:
-            uploads_needed = [UploadNeeded(**u) for u in raw_uploads]
-        except Exception as e:
-            logger.warning("uploads_needed validation failed: %s", str(e))
-
-    # 7. Validate patches (if present)
+    # 6. Validate patches (if present)
     patches = None
+    normalized_patch_dicts: list[dict[str, Any]] = []
     if raw_patches and isinstance(raw_patches, list):
         try:
             normalized = []
@@ -355,8 +528,27 @@ Respond with valid JSON now:
                         "type": raw_block.get("type", ""),
                         "updates": {k: v for k, v in raw_block.items() if k != "type"},
                     }
+                patch_type = normalize_section_type(p.get("type"))
+                p["type"] = patch_type
+                updates = p.get("updates")
+                if not isinstance(updates, dict):
+                    updates = {}
+                    p["updates"] = updates
+                if patch_type:
+                    # Canonical backend map always wins for style IDs.
+                    if "style" in updates:
+                        normalized_style, style_changed = normalize_style(patch_type, updates.get("style"))
+                        if style_changed:
+                            logger.warning(
+                                "Adjusted invalid patch style for section=%s from=%s to=%s based on backend canonical map",
+                                patch_type,
+                                updates.get("style"),
+                                normalized_style,
+                            )
+                        updates["style"] = normalized_style
                 normalized.append(p)
-            patches = [PatchCommand(**p) for p in normalized]
+            normalized_patch_dicts = normalized
+            patches = [PatchCommand(**p) for p in normalized_patch_dicts]
         except Exception as e:
             logger.error("Patches validation failed: %s | Data: %s", str(e), raw_patches)
             raise HTTPException(
@@ -364,7 +556,15 @@ Respond with valid JSON now:
                 detail=f"AI returned invalid patch structure: {str(e)} | Raw patches: {raw_patches}",
             )
 
-    # 8. Save this turn to session history (non-critical)
+    final_layout = _derive_final_layout(blueprint, patches, page_context_obj)
+    style_reasons = _extract_style_reasons(raw_blueprint, normalized_patch_dicts)
+    styles_selected = _styles_selected_from_layout(final_layout, style_reasons)
+    _validate_ai_uploads_against_layout(raw_uploads, final_layout)
+    uploads_needed = None
+    if final_layout is not None:
+        uploads_needed = [UploadNeeded(**u) for u in derive_uploads_needed(final_layout)]
+
+    # 7. Save this turn to session history (non-critical)
     try:
         saved_reply = reply
         if blueprint is not None:
@@ -385,6 +585,7 @@ Respond with valid JSON now:
         blueprint=blueprint,
         patches=patches,
         uploads_needed=uploads_needed,
+        styles_selected=styles_selected,
         user_id=request.user_id,
         session_id=request.session_id,
     )

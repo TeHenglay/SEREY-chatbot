@@ -67,6 +67,16 @@ class UploadNeeded(BaseModel):
     label: str = Field(..., description="Human-readable upload prompt label")
 
 
+class StyleSelection(BaseModel):
+    section: str = Field(..., description="Section type in lowercase")
+    style: int = Field(..., description="Resolved style ID for this section")
+    is_hidden: bool = Field(default=False, description="Whether the section is hidden")
+    style_reason: Optional[str] = Field(
+        default=None,
+        description="Optional AI rationale for the chosen style",
+    )
+
+
 class BuilderChatResponse(BaseModel):
     """Response from the builder chatbot. Always has a reply; blueprint is present when
     the AI generates or updates a page layout."""
@@ -74,6 +84,10 @@ class BuilderChatResponse(BaseModel):
     uploads_needed: Optional[list[UploadNeeded]] = Field(
         default=None,
         description="Upload prompts the frontend should render when sections need images",
+    )
+    styles_selected: Optional[list[StyleSelection]] = Field(
+        default=None,
+        description="Final resolved style per section after backend validation",
     )
     blueprint: Optional[PageBlueprint] = Field(
         default=None,

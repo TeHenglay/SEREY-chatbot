@@ -96,7 +96,7 @@ Generate the JSON blueprint now:
 
     # 3. Call Grok
     try:
-        raw_json = grok.generate(full_prompt)
+        raw_json = grok.generate_builder(full_prompt)
     except Exception as e:
         logger.error("Grok API error: %s", str(e))
         raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
