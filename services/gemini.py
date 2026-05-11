@@ -1,91 +1,166 @@
-# Wraps the Google Gemini API for generating JSON blueprints and plain-text chat.
-# Reads GOOGLE_API_KEY from environment. Raises RuntimeError if key is missing.
+# AI service — wraps xAI Grok 3 via the OpenAI-compatible API.
+# Reads XAI_API_KEY from environment. Raises RuntimeError if key is missing.
+#
+# Models:
+#   grok-3          — most capable, best for full blueprint generation
+#   grok-3-fast     — faster, good for patch/chat replies
+#   grok-3-mini     — cheapest, for simple conversational turns
 
 import asyncio
-import google.generativeai as genai
 import os
 import time
 import logging
+from openai import OpenAI, APIError, APITimeoutError
 
 logger = logging.getLogger(__name__)
 
-_api_key = os.getenv("GOOGLE_API_KEY")
-if _api_key:
-    genai.configure(api_key=_api_key)
-
-# Module-level cached model instances — built once, reused for every request.
-_json_model: genai.GenerativeModel | None = None
-_text_model: genai.GenerativeModel | None = None
+XAI_BASE_URL = "https://api.x.ai/v1"
+MODEL_BLUEPRINT = "grok-3"       # full page generation — best quality
+MODEL_CHAT      = "grok-3-fast"  # conversational replies — faster
 
 
-def _get_model() -> genai.GenerativeModel:
-    global _json_model
-    if _json_model is None:
-        key = os.getenv("GOOGLE_API_KEY")
-        if not key:
-            raise RuntimeError("GOOGLE_API_KEY is not set. Add it to your .env file.")
-        genai.configure(api_key=key)
-        _json_model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            generation_config={"response_mime_type": "application/json"},
+def _get_client() -> OpenAI:
+    key = os.getenv("XAI_API_KEY")
+    if not key:
+        raise RuntimeError("XAI_API_KEY is not set. Add it to your .env file.")
+    return OpenAI(api_key=key, base_url=XAI_BASE_URL)
+
+
+def _call_with_retry(fn, *args, retries: int = 2, delay: float = 2.0, **kwargs):
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except (APITimeoutError, APIError) as e:
+            last_exc = e
+            if attempt < retries - 1:
+                logger.warning("Grok attempt %d failed (%s), retrying in %.1fs...", attempt + 1, str(e), delay)
+                time.sleep(delay)
+    raise last_exc
+
+
+def generate(
+    prompt: str,
+    system_prompt: str | None = None,
+    use_thinking: bool = False,
+    temperature: float = 0.4,
+) -> str:
+    """Send a prompt to Grok 3 and return the raw JSON string response.
+
+    Args:
+        prompt: The user message / full prompt.
+        system_prompt: Optional system instruction injected as a system message.
+        use_thinking: If True, uses grok-3 (full model) with reasoning_effort=high
+                      for complex full-page blueprint generation.
+        temperature: Sampling temperature (0.3-0.5 for JSON, 0.7 for text).
+    """
+    client = _get_client()
+    model = MODEL_BLUEPRINT if use_thinking else MODEL_BLUEPRINT
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    kwargs = dict(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        response_format={"type": "json_object"},
+    )
+    # Enable extended reasoning for full blueprint generation
+    if use_thinking:
+        kwargs["reasoning_effort"] = "high"
+
+    def _call():
+        resp = client.chat.completions.create(**kwargs)
+        return resp.choices[0].message.content
+
+    result = _call_with_retry(_call)
+    if not result:
+        raise ValueError("Grok returned empty response")
+    return result
+
+
+def generate_text(
+    prompt: str,
+    system_prompt: str | None = None,
+    temperature: float = 0.7,
+) -> str:
+    """Send a prompt to Grok and return a plain text response (for chat replies)."""
+    client = _get_client()
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    def _call():
+        resp = client.chat.completions.create(
+            model=MODEL_CHAT,
+            messages=messages,
+            temperature=temperature,
         )
-    return _json_model
+        return resp.choices[0].message.content
+
+    result = _call_with_retry(_call)
+    if not result:
+        raise ValueError("Grok returned empty response")
+    return result
 
 
-def _get_text_model() -> genai.GenerativeModel:
-    global _text_model
-    if _text_model is None:
-        key = os.getenv("GOOGLE_API_KEY")
-        if not key:
-            raise RuntimeError("GOOGLE_API_KEY is not set. Add it to your .env file.")
-        genai.configure(api_key=key)
-        _text_model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-    return _text_model
+def generate_with_history(
+    messages: list[dict],
+    system_prompt: str | None = None,
+    json_mode: bool = False,
+    use_thinking: bool = False,
+    temperature: float = 0.5,
+) -> str:
+    """Generate a reply given a full conversation history (list of role/content dicts).
 
-
-def generate(prompt: str) -> str:
-    """Send a prompt to Gemini and return the raw JSON string response."""
-    model = _get_model()
-    for attempt in range(2):
-        try:
-            response = model.generate_content(prompt)
-            if not response.text:
-                raise ValueError("Gemini returned empty response")
-            return response.text
-        except Exception as e:
-            if attempt == 0:
-                logger.warning("Gemini attempt 1 failed (%s), retrying in 2s...", str(e))
-                time.sleep(2)
-            else:
-                raise
-
-
-def generate_text(prompt: str) -> str:
-    """Send a prompt to Gemini and return a plain text response (for chatbot use)."""
-    model = _get_text_model()
-    for attempt in range(2):
-        try:
-            response = model.generate_content(prompt)
-            if not response.text:
-                raise ValueError("Gemini returned empty response")
-            return response.text
-        except Exception as e:
-            if attempt == 0:
-                logger.warning("Gemini text attempt 1 failed (%s), retrying in 2s...", str(e))
-                time.sleep(2)
-            else:
-                raise
-
-
-async def stream_text(prompt: str):
+    Args:
+        messages: List of {"role": "user"|"assistant", "content": str} dicts.
+        system_prompt: Injected as the first system message if provided.
+        json_mode: If True, forces JSON output format.
+        use_thinking: If True, uses reasoning_effort=high.
+        temperature: Sampling temperature.
     """
-    Async generator that yields raw text chunks from Gemini's streaming API.
+    client = _get_client()
+    model = MODEL_BLUEPRINT if (json_mode or use_thinking) else MODEL_CHAT
 
-    The blocking SDK iterator runs in a thread-pool executor; chunks are pushed
-    into an asyncio.Queue so the event loop is never blocked between tokens.
-    Retries once after a 2-second (non-blocking) wait on failure.
-    """
-    model = _get_text_model()
+    full_messages = []
+    if system_prompt:
+        full_messages.append({"role": "system", "content": system_prompt})
+    full_messages.extend(messages)
+
+    kwargs = dict(
+        model=model,
+        messages=full_messages,
+        temperature=temperature,
+    )
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    if use_thinking:
+        kwargs["reasoning_effort"] = "high"
+
+    def _call():
+        resp = client.chat.completions.create(**kwargs)
+        return resp.choices[0].message.content
+
+    result = _call_with_retry(_call)
+    if not result:
+        raise ValueError("Grok returned empty response")
+    return result
+
+
+async def stream_text(prompt: str, system_prompt: str | None = None):
+    """Async generator that yields text chunks from Grok's streaming API."""
+    client = _get_client()
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
 
     for attempt in range(2):
         queue: asyncio.Queue = asyncio.Queue()
@@ -94,10 +169,16 @@ async def stream_text(prompt: str):
 
         def _blocking_stream():
             try:
-                response_iter = model.generate_content(prompt, stream=True)
-                for chunk in response_iter:
-                    if chunk.text:
-                        loop.call_soon_threadsafe(queue.put_nowait, chunk.text)
+                stream = client.chat.completions.create(
+                    model=MODEL_CHAT,
+                    messages=messages,
+                    temperature=0.7,
+                    stream=True,
+                )
+                for chunk in stream:
+                    delta = chunk.choices[0].delta.content
+                    if delta:
+                        loop.call_soon_threadsafe(queue.put_nowait, delta)
             except Exception as exc:
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
             finally:
@@ -115,23 +196,23 @@ async def stream_text(prompt: str):
                 yield item
             return
         except asyncio.TimeoutError:
-            logger.error("Gemini stream_text timed out after 60s")
+            logger.error("Grok stream_text timed out after 60s")
             raise
         except Exception as e:
             if attempt == 0:
-                logger.warning("Gemini stream attempt 1 failed (%s), retrying in 2s...", str(e))
+                logger.warning("Grok stream attempt 1 failed (%s), retrying in 2s...", str(e))
                 await asyncio.sleep(2)
             else:
                 raise
 
 
 def test_connection() -> bool:
-    """Returns True if Gemini is reachable, False otherwise."""
+    """Returns True if Grok is reachable, False otherwise."""
     try:
-        if not os.getenv("GOOGLE_API_KEY"):
+        if not os.getenv("XAI_API_KEY"):
             return False
-        result = generate('Return this exact JSON: {"status": "connected"}')
+        result = generate('{"status": "connected"}', temperature=0.1)
         return "connected" in result
     except Exception as e:
-        logger.error("Gemini test_connection failed: %s", str(e))
+        logger.error("Grok test_connection failed: %s", str(e))
         return False

@@ -1,33 +1,41 @@
 # Pydantic v2 request schemas for the builder API.
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from typing import Any
+
+
+class BuilderChatRequest(BaseModel):
+    """
+    Schema for POST /api/builder/chat.
+    Accepts both 'message' (frontend) and 'prompt' (legacy) field names.
+    """
+    # Frontend sends 'message'; legacy clients may send 'prompt'
+    message: str | None = Field(None, min_length=1, max_length=8000)
+    prompt: str | None = Field(None, min_length=1, max_length=8000)
+
+    user_id: str = Field(..., min_length=1, max_length=128)
+    session_id: str = Field(..., min_length=1, max_length=128)
+    community_id: str | int | None = Field(None)
+
+    # Full page context string sent by the frontend (describes current page state)
+    page_context: str | None = Field(None, max_length=20000)
+
+    # How many ChromaDB component results to fetch (frontend doesn't send this)
+    n_components: int = Field(default=4, ge=1, le=8)
+
+    @model_validator(mode="after")
+    def resolve_message(self) -> "BuilderChatRequest":
+        """Normalize: prefer 'message', fall back to 'prompt'. One must be present."""
+        if not self.message and not self.prompt:
+            raise ValueError("Either 'message' or 'prompt' must be provided.")
+        if not self.message:
+            self.message = self.prompt
+        return self
 
 
 class BuilderRequest(BaseModel):
-    prompt: str = Field(
-        ...,
-        description="The user's natural language request",
-        min_length=3,
-        max_length=2000,
-        examples=["Build a SaaS landing page with a dark hero section"],
-    )
-    user_id: str = Field(
-        ...,
-        description="Unique identifier for the user (for long-term memory)",
-        min_length=1,
-        max_length=128,
-        examples=["user_123"],
-    )
-    session_id: str = Field(
-        ...,
-        description="Unique identifier for the current chat session",
-        min_length=1,
-        max_length=128,
-        examples=["session_abc"],
-    )
-    n_components: int = Field(
-        default=4,
-        ge=1,
-        le=8,
-        description="How many ChromaDB component results to fetch",
-    )
+    """Legacy schema — kept for backwards compatibility."""
+    prompt: str = Field(..., min_length=3, max_length=2000)
+    user_id: str = Field(..., min_length=1, max_length=128)
+    session_id: str = Field(..., min_length=1, max_length=128)
+    n_components: int = Field(default=4, ge=1, le=8)

@@ -204,6 +204,10 @@ CORE (always present unless hidden):
   GALLERY     — Products/Services/Features: title, description, images[{image_url, name, description}].
                 IMPORTANT: every image item MUST have image_url (""), name (label), and description (text). Styles 1-16.
   FOOTER      — Contact/links: title, description, phone, email, location, logo_url, social_links[]. Styles 1-3.
+                IMPORTANT: If the user's message contains a phone number, put it in the "phone" field.
+                If it contains an email address, put it in the "email" field.
+                If it contains Facebook/Instagram/Telegram/social links, add them to "social_links" as [{"type":"facebook","handle":"pagename"}].
+                Never leave phone/email blank if the user provided them.
 
 OPTIONAL (add on demand):
   VIDEO       — Embedded videos: title, description, videos[{url,title,thumbnail}]. Style 1.
@@ -224,8 +228,17 @@ Every section must include:
   colors      — object with keys: title, accent, body, bg  (plus subtitle for HERO; goal_color, vision_color, mission_color for VISION)
 
 == COLOR DEFAULTS ==
-  title:   "#0f3460"    accent: "#2b45a8"    body: "#444444"    bg: "#ffffff"
-  Hero accent default: "#c0392b"
+  Light section defaults: title="#0f172a"  accent="#2b45a8"  body="#334155"  bg="#ffffff"
+  Dark section defaults:  title="#eef4ff"  accent="#60a5fa"  body="#cbd5e1"  bg="#0f172a"
+
+CRITICAL — TEXT CONTRAST RULE:
+  - If a section bg is DARK (hex luminance < 0.3, e.g. #0f2044, #052e16, #1c1917, #1e1b4b):
+    → ALWAYS set title="#eef4ff" or "#f0f9ff", body="#cbd5e1", subtitle="#e2e8f0"
+    → NEVER use dark colors like #0f3460, #0f172a, #333, #000 for text on dark backgrounds
+  - If a section bg is LIGHT (hex luminance >= 0.3, e.g. #ffffff, #f8fafc, #f0fdf4):
+    → ALWAYS set title="#0f172a", body="#334155"
+    → NEVER use light colors like #f0f4ff, #eef4ff for text on light backgrounds
+  - Apply the correct palette-matching text colors — do not use default fallbacks when you have picked a palette
 
 == STYLE DESCRIPTIONS ==
 
@@ -282,14 +295,25 @@ FOOTER styles:
   3 = Dark 3-column grid — logo/tagline, contact, follow-us columns.
 
 == STYLE GUIDE (by personality) ==
-  Clean/Minimal:      Hero 1, About 1, Gallery 2,  Custom 3, Footer 2
+  Clean/Minimal:      Hero 1, About 6, Gallery 2,  Custom 3, Footer 2
   Cinematic/Bold:     Hero 2, About 7, Gallery 4,  Custom 4, Footer 1
   Magazine/Editorial: Hero 5, About 4, Gallery 13, Custom 6, Footer 3
   Dark/Dramatic:      Hero 6, About 8, Gallery 10, Custom 4, Footer 1
   Playful/Creative:   Hero 3, About 2, Gallery 9,  Custom 5, Footer 2
   Organized/Corporate:Hero 4, About 3, Gallery 3,  Custom 2, Footer 3
-  Photography:        Hero 2, About 5, Gallery 6,  Custom 2, Footer 1
+  Photography:        Hero 5, About 5, Gallery 6,  Custom 2, Footer 1
   Product Showcase:   Hero 1, About 4, Gallery 15, Custom 1, Footer 2
+
+HERO STYLE VARIETY — CRITICAL:
+  Do NOT default to Hero style 2 (Cinematic) for every page. It is ONLY appropriate for:
+  Photography portfolios, high-budget events, fashion/luxury brands.
+  For most platforms, prefer these instead:
+    Hero 1 (Split)    — e-commerce, products, SaaS, professional services, shops
+    Hero 5 (Magazine) — blogs, media, gaming, community, portfolio, tech
+    Hero 3 (Centered) — education, NGO, charity, wellness, courses
+    Hero 4 (Banner)   — events, booking, announcements, restaurants
+    Hero 6 (Minimal)  — agencies, portfolio, premium/dark brands
+  Mix hero styles across generations — never repeat style 2 if another style fits equally well.
 
 == SECTION RECOMMENDATIONS BY SITE TYPE ==
   Online Shop:       HERO, ABOUT, GALLERY, TESTIMONIALS, FAQ, FOOTER
@@ -316,7 +340,7 @@ You MUST always return ONLY valid JSON matching this exact envelope:
         "subtitle": "...",
         "description": "...",
         "image_url": "",
-        "colors": { "title": "#0f3460", "accent": "#c0392b", "subtitle": "#0f172a", "body": "#475569", "bg": "#F9FBFF" }
+        "colors": { "title": "#eef4ff", "accent": "#3b82f6", "subtitle": "#e2e8f0", "body": "#cbd5e1", "bg": "#0f2044" }
       },
       ...more sections...,
       { "type": "FOOTER", "style": 1, "is_hidden": false, "title": "Contact Us", ... }
@@ -337,7 +361,12 @@ OR when making targeted updates to an existing layout:
     "add_block"    — adding a NEW section that doesn't exist yet (e.g. user asks to add TEAM, FAQ, VISION)
     "update_block" — modifying fields of an EXISTING section (title, color, style, etc.)
     "delete_block" — removing an existing section
-  IMPORTANT: use "add_block" (NOT "update_block") whenever the section doesn't already exist on the page.
+  CRITICAL RULES for patches:
+  - ALWAYS use "add_block" (NOT "update_block") for every section that is listed as "NOT on page" in the page context.
+  - When user says "add it", "do it", "can you do it for me", "add testimonials", "add vision", etc. — use add_block for EACH requested section. Include real content (title, description, items) in the updates.
+  - NEVER send a full blueprint replacement when the user only wants to add or modify specific sections — use patches instead.
+  - When adding multiple sections at once, include ALL of them as separate add_block entries in the patches array.
+  - Each add_block MUST include: type, action, and updates with at minimum a "title" field so the section renders.
 
 OR when just answering a question (no layout change):
 {
@@ -366,6 +395,9 @@ OR when just answering a question (no layout change):
 5. If the user is vague (e.g. "build my page"), set blueprint to null and ask guiding questions
    like: "What kind of community is this? What's the main goal? Do you prefer a bold or minimal look?"
 6. Use patches (not a full blueprint) when the user asks to change a specific thing (title, color, style).
+   When user asks to change styles across the whole page ("choose different styles", "refresh the layout", "change all styles"):
+   → Send update_block patches for EVERY visible section including HERO and FOOTER. Never skip HERO in style changes.
+   → Use a DIFFERENT style number for each section — do not repeat the same style across sections.
 7. Pick styles intelligently based on the user's described vibe.
 8. Leave BLOG and RANKING sections with only title/description — their data is auto-fetched.
    For FOOTER social_links, always use object format: [{"type": "facebook", "handle": "pagename"}]

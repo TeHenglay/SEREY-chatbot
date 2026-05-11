@@ -20,7 +20,7 @@ class ChatRequest(BaseModel):
         ...,
         description="The user's chat message",
         min_length=1,
-        max_length=4000,
+        max_length=16000,
         examples=["Can you make the hero section use a blue gradient?"],
     )
     user_id: str = Field(
