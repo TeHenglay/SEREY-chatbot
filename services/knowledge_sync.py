@@ -334,6 +334,68 @@ async def sync_knowledge() -> dict:
 
         logger.info("Step 6: fetched %d additional platform chunks.", len(step6_reqs))
 
+        # ------------------------------------------------------------------
+        # Step 7 — Cambodia weather (Open-Meteo, no API key required)
+        # ------------------------------------------------------------------
+        try:
+            weather_r = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": 11.5625,
+                    "longitude": 104.916,
+                    "current": "temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m",
+                    "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code",
+                    "timezone": "Asia/Phnom_Penh",
+                    "forecast_days": 3,
+                },
+            )
+            weather_r.raise_for_status()
+            w = weather_r.json()
+            current = w.get("current", {})
+            daily = w.get("daily", {})
+
+            WMO_DESCRIPTIONS = {
+                0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+                45: "Foggy", 48: "Depositing rime fog",
+                51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
+                61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
+                80: "Slight showers", 81: "Moderate showers", 82: "Violent showers",
+                95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Thunderstorm with heavy hail",
+            }
+
+            def wmo(code):
+                return WMO_DESCRIPTIONS.get(code, f"Code {code}")
+
+            dates = daily.get("time", [])
+            forecast_lines = []
+            for i, date in enumerate(dates):
+                forecast_lines.append(
+                    f"  {date}: {wmo(daily['weather_code'][i])}, "
+                    f"high {daily['temperature_2m_max'][i]}°C / low {daily['temperature_2m_min'][i]}°C, "
+                    f"rain {daily['precipitation_sum'][i]}mm"
+                )
+
+            content = (
+                f"Current conditions in Phnom Penh, Cambodia:\n"
+                f"  Temperature: {current.get('temperature_2m')}°C\n"
+                f"  Humidity: {current.get('relative_humidity_2m')}%\n"
+                f"  Precipitation: {current.get('precipitation')}mm\n"
+                f"  Wind speed: {current.get('wind_speed_10m')} km/h\n"
+                f"  Conditions: {wmo(current.get('weather_code', -1))}\n\n"
+                f"3-day forecast:\n" + "\n".join(forecast_lines)
+            )
+
+            live_chunks.append({
+                "id": "live_cambodia_weather",
+                "category": "general",
+                "title": f"Cambodia Weather — {current.get('time', 'today')[:10]}",
+                "content": content,
+            })
+            logger.info("Step 7: fetched Cambodia weather.")
+        except Exception as e:
+            errors.append(f"cambodia-weather: {e}")
+            logger.warning("Step 7 weather fetch failed: %s", e)
+
     logger.info(
         "Final sync: %d shops, %d products, %d total live chunks, %d errors.",
         len(unique_shops), total_products, len(live_chunks), len(errors),
