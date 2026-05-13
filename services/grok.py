@@ -93,6 +93,8 @@ def generate_text(prompt: str) -> str:
                 model=_GROK_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
+                max_tokens=800,
+                timeout=25,
             )
             if not response.choices[0].message.content:
                 raise ValueError("Grok returned empty response")
@@ -120,7 +122,9 @@ async def stream_text(prompt: str):
                 model=_GROK_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
+                max_tokens=800,
                 stream=True,
+                timeout=25,
             )
             async for chunk in response:
                 if chunk.choices[0].delta.content:

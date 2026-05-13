@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
@@ -19,6 +20,36 @@ from services.memory import append_session_turn, get_session_history_prompt
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Response cache — shared across users for common questions.
+# Key: (normalized_message, flow). TTL: 5 minutes.
+# Only caches the raw Grok reply; link enrichment still runs per-request.
+# ---------------------------------------------------------------------------
+_CACHE_TTL = 300  # seconds
+_response_cache: dict[tuple[str, str], tuple[str, float]] = {}
+
+
+def _cache_key(message: str, flow: str | None) -> tuple[str, str]:
+    normalized = " ".join(message.lower().split())
+    return (normalized, flow or "")
+
+
+def _cache_get(key: tuple[str, str]) -> str | None:
+    entry = _response_cache.get(key)
+    if entry and (time.monotonic() - entry[1]) < _CACHE_TTL:
+        return entry[0]
+    if entry:
+        del _response_cache[key]
+    return None
+
+
+def _cache_set(key: tuple[str, str], raw_reply: str) -> None:
+    # Evict old entries to keep memory bounded (max 200 entries)
+    if len(_response_cache) >= 200:
+        oldest_key = min(_response_cache, key=lambda k: _response_cache[k][1])
+        del _response_cache[oldest_key]
+    _response_cache[key] = (raw_reply, time.monotonic())
 
 _CHAT_API_KEY = os.getenv("CHAT_API_KEY", "")
 
@@ -176,9 +207,11 @@ GUIDELINES:
 
 PRODUCT / SHOP LISTING FORMAT:
 When the user asks about featured products, discounted items, products in a shop, or any list of products/items — you MUST:
-1. Start with one short intro sentence (e.g. "Here are the currently featured products on Serey Marketplace:")
+1. Start with ONE short intro sentence — max 10 words (e.g. "Here are the cheapest products on Serey Marketplace:"). Do NOT mention user memory or prior conversations in this sentence.
 2. List EVERY individual item as a bullet point in this exact format:
-   • **[Product Name]**: [brief description], $[price][, with X% discount][, discount expires [date] or permanent].
+   • **<actual product name>**: [brief description], **$<price>**[, **X% discount**][, discount expires <date>].
+   - Use the real product name — do NOT wrap it in brackets like [name] or [Product Name].
+   - Only include the discount expiry if there is a real expiry date. Do NOT say "permanent".
 3. Include ALL items from the knowledge — do NOT summarize or group them. List each one separately.
 4. After the bullet list, add a ##LINKS## block with one entry per product (type="product") plus a general marketplace link.
 5. NEVER replace individual product listings with a vague paragraph summary.
@@ -209,38 +242,42 @@ Rules for the LINKS block:
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(_verify_api_key)])
 async def chat(request: ChatRequest):
-    # 1. Semantic search: only fetch knowledge chunks relevant to this question
-    relevant_knowledge = search.search_serey_knowledge(request.message, n_results=8)
-
-    # 2. Retrieve long-term preferences from Mem0 (cross-session user preferences)
-    long_term_memory = memory.get_user_preferences(request.user_id, request.message)
-
-    # 3. Retrieve short-term history from the in-process local store (synchronous, exact)
-    #    This is the fix for within-session recall (e.g. user states their name and AI
-    #    forgets it on the very next turn). Unlike Mem0, this is immediate and exact.
+    cache_key = _cache_key(request.message, request.flow)
     session_history = get_session_history_prompt(request.session_id)
 
-    # 4. Build the full prompt — only relevant knowledge injected, not the whole DB
-    history_section = (
-        f"CONVERSATION HISTORY (this session — use this to recall what the user told you):\n{session_history}"
-        if session_history
-        else "CONVERSATION HISTORY: (no prior turns in this session)"
+    # 1 + 2: run both ChromaDB lookups in parallel
+    relevant_knowledge, long_term_memory = await asyncio.gather(
+        asyncio.to_thread(search.search_serey_knowledge, request.message, 8),
+        asyncio.to_thread(memory.get_user_preferences, request.user_id, request.message),
     )
 
-    flow_section = ""
-    if request.flow and request.flow in _FLOW_PROMPTS:
-        flow_section = f"\n---\n{_FLOW_PROMPTS[request.flow]}"
+    # 3. Check response cache before calling Grok (only for sessions with no prior history,
+    #    so cached answers don't bleed into mid-conversation context)
+    cached = _cache_get(cache_key) if not session_history else None
+    if cached:
+        logger.debug("Cache hit for: %s", request.message[:60])
+        raw_reply = cached
+    else:
+        history_section = (
+            f"CONVERSATION HISTORY (this session — use this to recall what the user told you):\n{session_history}"
+            if session_history
+            else "CONVERSATION HISTORY: (no prior turns in this session)"
+        )
 
-    page_context_section = ""
-    if request.page_context and request.page_context.strip():
-        page_context_section = f"""
+        flow_section = ""
+        if request.flow and request.flow in _FLOW_PROMPTS:
+            flow_section = f"\n---\n{_FLOW_PROMPTS[request.flow]}"
+
+        page_context_section = ""
+        if request.page_context and request.page_context.strip():
+            page_context_section = f"""
 ---
 
 CURRENT PAGE CONTENT (the text the user is writing — use this to answer their question):
 {request.page_context.strip()}
 """
 
-    full_prompt = f"""{SEREY_SYSTEM_PROMPT}{flow_section}
+        full_prompt = f"""{SEREY_SYSTEM_PROMPT}{flow_section}
 
 ---
 
@@ -260,12 +297,15 @@ USER: {request.message}
 
 SEREY ASSISTANT:"""
 
-    # 3. Call Grok (plain text mode)
-    try:
-        raw_reply = grok.generate_text(full_prompt)
-    except Exception as e:
-        logger.error("Grok chat error: %s", str(e))
-        raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
+        try:
+            raw_reply = await asyncio.to_thread(grok.generate_text, full_prompt)
+        except Exception as e:
+            logger.error("Grok chat error: %s", str(e))
+            raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
+
+        # Cache only first-turn answers (no session history) — these are the common questions
+        if not session_history:
+            _cache_set(cache_key, raw_reply)
 
     # 4. Extract links block from reply
     reply, links = _extract_links(raw_reply)

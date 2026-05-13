@@ -385,8 +385,8 @@ def transform_featured_items(data: dict) -> dict:
                 disc_str = f", {disc}% off"
                 if expires:
                     disc_str += f" (expires {expires})"
-                else:
-                    disc_str += " (permanent discount)"
+                # no expiry — omit, do not label as "permanent"
+                pass
             if item_id:
                 if itype == "book":
                     url = f"/sereymarket/product/{item_id}?type=book"
@@ -451,16 +451,14 @@ def transform_active_discounts(data: dict) -> dict:
             line = f"{title} ({itype}): was ${original}, now ${discounted} ({pct}% off)"
         if expires:
             line += f", expires {expires}"
-        else:
-            line += ", no expiry date (permanent)"
+        # no expiry — omit, do not label as "permanent"
         lines.append(line)
 
     return {
         "title": "Serey Marketplace Active Discounts",
         "content": (
             f"There are currently {total} active discounts on Serey Marketplace, listed soonest-expiring first. "
-            + " | ".join(lines) + ". "
-            "Note: items with no expiry date are permanently discounted until manually removed."
+            + " | ".join(lines) + "."
             if lines else "No active discounts currently available."
         ),
     }
