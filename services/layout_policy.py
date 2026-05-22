@@ -34,28 +34,29 @@ SECTION_STYLE_MAP: dict[str, dict[str, Any]] = {
         },
     },
     "VIDEO": {
-        "allowed_styles": (1,),
-        "rendered_fields": {1: ()},
+        "allowed_styles": (1, 2, 3, 4, 5),
+        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5)},
     },
     "VISION": {
         "allowed_styles": tuple(range(1, 7)),
         "rendered_fields": {style: () for style in range(1, 7)},
     },
     "BLOG": {
-        "allowed_styles": (1,),
-        "rendered_fields": {1: ()},
+        "allowed_styles": (1, 2, 3, 4, 5, 6),
+        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5, 6)},
     },
     "TEAM": {
-        "allowed_styles": (1,),
-        "rendered_fields": {1: ("members",)},
+        "allowed_styles": (1, 2, 4, 5, 6, 7),
+        "rendered_fields": {style: ("members",) for style in (1, 2, 4, 5, 6, 7)},
     },
     "FAQ": {
-        "allowed_styles": (1,),
-        "rendered_fields": {1: ()},
+        "allowed_styles": (1, 2, 3, 4, 5, 6),
+        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5, 6)},
     },
     "TESTIMONIALS": {
-        "allowed_styles": (1,),
-        "rendered_fields": {1: ("testimonial_items",)},
+        "allowed_styles": (1, 2, 3, 4, 5, 6, 7),
+        # style 7 = Cards No Image — no image uploads needed
+        "rendered_fields": {**{style: ("testimonial_items",) for style in (1, 2, 3, 4, 5, 6)}, 7: ()},
     },
     "CUSTOM": {
         "allowed_styles": tuple(range(1, 7)),
@@ -69,8 +70,8 @@ SECTION_STYLE_MAP: dict[str, dict[str, Any]] = {
         },
     },
     "RANKING": {
-        "allowed_styles": (1,),
-        "rendered_fields": {1: ()},
+        "allowed_styles": (1, 2, 3, 4),
+        "rendered_fields": {style: () for style in (1, 2, 3, 4)},
     },
 }
 

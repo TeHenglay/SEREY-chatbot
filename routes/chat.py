@@ -264,10 +264,6 @@ async def chat(request: ChatRequest):
             else "CONVERSATION HISTORY: (no prior turns in this session)"
         )
 
-        flow_section = ""
-        if request.flow and request.flow in _FLOW_PROMPTS:
-            flow_section = f"\n---\n{_FLOW_PROMPTS[request.flow]}"
-
         page_context_section = ""
         if request.page_context and request.page_context.strip():
             page_context_section = f"""
@@ -277,11 +273,10 @@ CURRENT PAGE CONTENT (the text the user is writing — use this to answer their 
 {request.page_context.strip()}
 """
 
-        full_prompt = f"""{SEREY_SYSTEM_PROMPT}{flow_section}
+        flow_extra = f"\n---\n{_FLOW_PROMPTS[request.flow]}" if request.flow and request.flow in _FLOW_PROMPTS else ""
+        system_prompt = SEREY_SYSTEM_PROMPT + flow_extra
 
----
-
-RELEVANT KNOWLEDGE (retrieved for this question):
+        full_prompt = f"""RELEVANT KNOWLEDGE (retrieved for this question):
 {relevant_knowledge}
 
 ---
@@ -298,7 +293,7 @@ USER: {request.message}
 SEREY ASSISTANT:"""
 
         try:
-            raw_reply = await asyncio.to_thread(grok.generate_text, full_prompt)
+            raw_reply = await asyncio.to_thread(grok.generate_text, full_prompt, system_prompt)
         except Exception as e:
             logger.error("Grok chat error: %s", str(e))
             raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
@@ -399,10 +394,6 @@ async def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
         else "CONVERSATION HISTORY: (no prior turns in this session)"
     )
 
-    flow_section = ""
-    if request.flow and request.flow in _FLOW_PROMPTS:
-        flow_section = f"\n---\n{_FLOW_PROMPTS[request.flow]}"
-
     page_context_section = ""
     if request.page_context and request.page_context.strip():
         page_context_section = f"""
@@ -412,11 +403,10 @@ CURRENT PAGE CONTENT (the text the user is writing — use this to answer their 
 {request.page_context.strip()}
 """
 
-    full_prompt = f"""{SEREY_SYSTEM_PROMPT}{flow_section}
+    flow_extra = f"\n---\n{_FLOW_PROMPTS[request.flow]}" if request.flow and request.flow in _FLOW_PROMPTS else ""
+    stream_system_prompt = SEREY_SYSTEM_PROMPT + flow_extra
 
----
-
-RELEVANT KNOWLEDGE (retrieved for this question):
+    full_prompt = f"""RELEVANT KNOWLEDGE (retrieved for this question):
 {relevant_knowledge}
 
 ---
@@ -438,7 +428,7 @@ SEREY ASSISTANT:"""
         final_reply = ""          # clean text to persist after stream ends
 
         try:
-            async for chunk_text in grok.stream_text(full_prompt):
+            async for chunk_text in grok.stream_text(full_prompt, stream_system_prompt):
                 accumulated += chunk_text
 
                 if not links_marker_found:

@@ -3,6 +3,7 @@
 # The AI responds with a text reply AND an updated PageBlueprint (or null if not applicable).
 # The blueprint matches the V2 API contract: { community_id, content: [...sections] }
 
+import asyncio
 from copy import deepcopy
 from fastapi import APIRouter, HTTPException, Header, Depends
 from schemas.chat import ChatRequest, BuilderChatResponse, UploadNeeded
@@ -210,15 +211,16 @@ CORE (always present unless hidden):
                 Never leave phone/email blank if the user provided them.
 
 OPTIONAL (add on demand):
-  VIDEO       — Embedded videos: title, description, videos[{url,title,thumbnail}]. Style 1.
+  VIDEO       — Embedded videos: title, description, videos[{url,title,thumbnail}]. Styles 1-5.
   VISION      — Goals/Vision/Mission: title, description, goals_title, goals_description,
                 vision_title, vision_description, mission_title, mission_description. Styles 1-6.
-  BLOG        — Auto-fetches community posts: title, description only. Style 1.
-  TEAM        — Team members: title, description, members[{name,role,image_url}]. Style 1.
-  FAQ         — Q&A list: title, faq_items[{q,a}]. Style 1.
-  TESTIMONIALS— Customer quotes: title, testimonial_items[{name,role,quote,image_url}] (max 6). Style 1.
+  BLOG        — Auto-fetches community posts: title, description only. Styles 1-6.
+  TEAM        — Team members: title, description, members[{name,role,image_url}]. Styles 1,2,4,5,6,7.
+  FAQ         — Q&A list: title, faq_items[{q,a}]. Styles 1-6.
+  TESTIMONIALS— Customer quotes: title, testimonial_items[{name,role,quote,image_url}] (max 6). Styles 1-7.
+                NOTE: style 7 = Cards No Image — omit image_url from items.
   CUSTOM      — Flexible promo: title, description, button_label, button_url, image_url, image_url_2. Styles 1-6.
-  RANKING     — Auto-fetches top authors: title, description only. Style 1.
+  RANKING     — Auto-fetches top authors: title, description only. Styles 1-4.
 
 == SECTION OBJECT SHAPE ==
 Every section must include:
@@ -281,6 +283,13 @@ CUSTOM styles:
   5 = Card: image on top of styled card with accent underline. Playful.
   6 = Highlight split: accent-colored LEFT panel (title+desc+button), white RIGHT with 1-2 images. Brand.
 
+VIDEO styles:
+  1 = Classic grid — thumbnails in a clean grid layout.
+  2 = Dark — dark background, video cards with glow effects.
+  3 = Split — large featured video left, playlist right.
+  4 = Cards — video thumbnails as styled cards.
+  5 = Showcase — hero-style large single video with description.
+
 VISION styles:
   1 = 3 cards with accent icon circles, split layout.
   2 = 3-column colored cards. Each card bg = its color (goal/vision/mission).
@@ -288,6 +297,45 @@ VISION styles:
   4 = Numbered steps — dark style.
   5 = Feature grid — icon circle, title, description, centered.
   6 = Split panel — accent-bg column left, list of icon rows right.
+
+BLOG styles:
+  1 = Grid — card grid with image, title, excerpt.
+  2 = List — vertical list with image left, text right.
+  3 = Magazine — editorial large+small layout.
+  4 = Minimal — text-only clean list.
+  5 = Overlay — image cards with text overlay on hover.
+  6 = Editorial — magazine-style with featured post.
+
+TEAM styles:
+  1 = Grid — cards with photo, name, role.
+  2 = Cards — elevated cards with accent border.
+  4 = List — horizontal rows with photo left, bio right.
+  5 = Banner — full-width strip per member.
+  6 = Spotlight — large featured layout.
+  7 = Staggered — alternating left/right layout.
+
+FAQ styles:
+  1 = Accordion — expandable questions, minimal.
+  2 = Two Column — questions split into two columns.
+  3 = Split — category sidebar left, answers right.
+  4 = Left Border — questions with colored left border accent.
+  5 = Cards — each Q&A in a card.
+  6 = Numbered — numbered list style.
+
+TESTIMONIALS styles:
+  1 = Cards — photo + quote cards in a grid.
+  2 = Large Quote — single large centered quote.
+  3 = Side by Side — two-column quote layout.
+  4 = Minimal List — clean stacked list.
+  5 = Left Border — quotes with accent left border.
+  6 = Dark — dark background with glowing cards.
+  7 = Cards No Image — cards without author photos (omit image_url from items).
+
+RANKING styles:
+  1 = List — ranked list with rank number, name, score.
+  2 = Podium — top 3 on a podium, others below.
+  3 = Cards — each author as a card.
+  4 = Circles — circular avatar layout.
 
 FOOTER styles:
   1 = Dark navy — logo + contact left, social icons + copyright bottom strip.
@@ -450,11 +498,7 @@ async def builder_chat(request: ChatRequest):
         for mismatch in compare_with_backend_map(frontend_style_map):
             logger.warning("Frontend style map mismatch: %s", mismatch)
 
-    full_prompt = f"""{BUILDER_SYSTEM_PROMPT}
-
----
-
-{community_ctx}
+    full_prompt = f"""{community_ctx}
 
 {page_ctx}
 
@@ -469,11 +513,28 @@ Respond with valid JSON now:
 
     # 3. Call Grok — retry once on malformed JSON
     data = None
+    def _clean_raw(raw: str) -> str:
+        """Strip markdown code fences the model sometimes wraps around JSON."""
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            stripped = stripped.split("\n", 1)[-1]
+            if stripped.endswith("```"):
+                stripped = stripped[: stripped.rfind("```")]
+        return stripped.strip()
+
     for attempt in (1, 2):
         raw_response = ""
         try:
-            raw_response = grok.generate_builder(full_prompt)
-            data = json.loads(raw_response)
+            raw_response = await asyncio.to_thread(grok.generate_builder, full_prompt, BUILDER_SYSTEM_PROMPT)
+            cleaned = _clean_raw(raw_response)
+            if not cleaned:
+                raise ValueError("Model returned empty content after fence stripping")
+            # If model returned plain text instead of JSON, wrap it as a reply-only envelope
+            if not cleaned.startswith("{"):
+                logger.warning("Model returned plain text instead of JSON — wrapping as reply: %s", cleaned[:200])
+                data = {"reply": cleaned, "blueprint": None, "patches": None}
+                break
+            data = json.loads(cleaned)
             break
         except json.JSONDecodeError as e:
             logger.error("JSON parse error (attempt %d): %s | Raw: %s", attempt, str(e), raw_response[:600])
@@ -489,7 +550,7 @@ Respond with valid JSON now:
 
     # 4. Extract envelope fields
     try:
-        reply: str = data.get("reply", "...")
+        reply: str = data.get("reply") or ""
         raw_blueprint = data.get("blueprint")
         raw_patches = data.get("patches")
         raw_uploads = data.get("uploads_needed")

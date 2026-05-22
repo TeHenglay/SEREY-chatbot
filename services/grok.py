@@ -14,8 +14,8 @@ _api_key = os.getenv("GROK_API_KEY")
 
 # xAI Grok API endpoint (OpenAI-compatible)
 _GROK_BASE_URL = "https://api.x.ai/v1"
-_GROK_MODEL = "grok-3-mini"
-_GROK_BUILDER_MODEL = "grok-3"
+_GROK_MODEL = "grok-4-1-fast-non-reasoning"
+_GROK_BUILDER_MODEL = "grok-4.3"
 
 # Module-level cached client instances
 _client: OpenAI | None = None
@@ -42,6 +42,14 @@ def _get_async_client() -> AsyncOpenAI:
     return _async_client
 
 
+def _build_messages(prompt: str, system: str | None) -> list[dict]:
+    msgs = []
+    if system:
+        msgs.append({"role": "system", "content": system})
+    msgs.append({"role": "user", "content": prompt})
+    return msgs
+
+
 def generate(prompt: str) -> str:
     """Send a prompt to Grok and return the raw JSON string response."""
     client = _get_client()
@@ -63,15 +71,18 @@ def generate(prompt: str) -> str:
                 raise
 
 
-def generate_builder(prompt: str) -> str:
+def generate_builder(prompt: str, system: str | None = None) -> str:
     """Send a prompt to Grok using the builder model and return raw JSON text."""
     client = _get_client()
+    messages = _build_messages(prompt, system)
     for attempt in range(2):
         try:
             response = client.chat.completions.create(
                 model=_GROK_BUILDER_MODEL,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 temperature=0.7,
+                max_tokens=4096,
+                timeout=60,
             )
             if not response.choices[0].message.content:
                 raise ValueError("Grok returned empty response")
@@ -84,14 +95,15 @@ def generate_builder(prompt: str) -> str:
                 raise
 
 
-def generate_text(prompt: str) -> str:
+def generate_text(prompt: str, system: str | None = None) -> str:
     """Send a prompt to Grok and return a plain text response (for chatbot use)."""
     client = _get_client()
+    messages = _build_messages(prompt, system)
     for attempt in range(2):
         try:
             response = client.chat.completions.create(
                 model=_GROK_MODEL,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 temperature=0.7,
                 max_tokens=800,
                 timeout=25,
@@ -107,7 +119,7 @@ def generate_text(prompt: str) -> str:
                 raise
 
 
-async def stream_text(prompt: str):
+async def stream_text(prompt: str, system: str | None = None):
     """
     Async generator that yields raw text chunks from Grok's streaming API.
 
@@ -115,20 +127,24 @@ async def stream_text(prompt: str):
     Retries once after a 2-second (non-blocking) wait on failure.
     """
     client = _get_async_client()
+    messages = _build_messages(prompt, system)
 
     for attempt in range(2):
         try:
             response = await client.chat.completions.create(
                 model=_GROK_MODEL,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 temperature=0.7,
                 max_tokens=800,
                 stream=True,
                 timeout=25,
             )
             async for chunk in response:
-                if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and delta.content:
+                    yield delta.content
             return
         except Exception as e:
             if attempt == 0:

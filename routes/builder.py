@@ -2,6 +2,7 @@
 # Accepts a prompt + community_id and returns a complete PageBlueprint ready
 # to POST to /api/v2/landing-pages.
 
+import asyncio
 from fastapi import APIRouter, HTTPException
 from schemas.requests import BuilderRequest
 from schemas.blueprint import PageBlueprint
@@ -74,11 +75,7 @@ async def generate_blueprint(request: BuilderRequest):
     short_term_memory = memory.get_session_context(request.session_id, request.prompt)
 
     # 2. Build prompt
-    full_prompt = f"""{SYSTEM_PROMPT}
-
----
-
-COMMUNITY ID: {getattr(request, 'community_id', 0)} — use this exact integer in community_id
+    full_prompt = f"""COMMUNITY ID: {getattr(request, 'community_id', 0)} — use this exact integer in community_id
 
 USER LONG-TERM PREFERENCES:
 {long_term_memory}
@@ -94,16 +91,27 @@ USER REQUEST:
 Generate the JSON blueprint now:
 """
 
+    def _clean_raw(raw: str) -> str:
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            stripped = stripped.split("\n", 1)[-1]
+            if stripped.endswith("```"):
+                stripped = stripped[: stripped.rfind("```")]
+        return stripped.strip()
+
     # 3. Call Grok
     try:
-        raw_json = grok.generate_builder(full_prompt)
+        raw_json = await asyncio.to_thread(grok.generate_builder, full_prompt, SYSTEM_PROMPT)
     except Exception as e:
         logger.error("Grok API error: %s", str(e))
         raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
 
     # 4. Parse and validate
     try:
-        data = json.loads(raw_json)
+        cleaned = _clean_raw(raw_json)
+        if not cleaned:
+            raise ValueError("Model returned empty content")
+        data = json.loads(cleaned)
         blueprint = PageBlueprint(**data)
     except json.JSONDecodeError as e:
         logger.error("JSON decode error from AI: %s | Raw: %s", str(e), raw_json[:500])
