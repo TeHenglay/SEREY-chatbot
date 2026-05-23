@@ -472,6 +472,7 @@ OR when just answering a question (no layout change):
 
 @router.post("/builder/chat", response_model=BuilderChatResponse, dependencies=[Depends(_verify_api_key)])
 async def builder_chat(request: ChatRequest):
+    logger.info("Model: %s | user=%s session=%s community=%s", grok.BUILDER_MODEL, request.user_id, request.session_id, request.community_id)
     # 1. Retrieve session history
     session_history = get_session_history_prompt(request.session_id)
     history_section = (

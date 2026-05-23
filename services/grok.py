@@ -17,6 +17,10 @@ _GROK_BASE_URL = "https://api.x.ai/v1"
 _GROK_MODEL = "grok-3-mini"
 _GROK_BUILDER_MODEL = "grok-4.3"
 
+# Public aliases for route-level logging
+CHAT_MODEL = _GROK_MODEL
+BUILDER_MODEL = _GROK_BUILDER_MODEL
+
 # Module-level cached client instances
 _client: OpenAI | None = None
 _async_client: AsyncOpenAI | None = None

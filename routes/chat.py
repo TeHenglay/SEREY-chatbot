@@ -242,6 +242,7 @@ Rules for the LINKS block:
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(_verify_api_key)])
 async def chat(request: ChatRequest):
+    logger.info("Model: %s | user=%s session=%s flow=%s", grok.CHAT_MODEL, request.user_id, request.session_id, request.flow or "none")
     cache_key = _cache_key(request.message, request.flow)
     session_history = get_session_history_prompt(request.session_id)
 
@@ -373,6 +374,7 @@ def _persist_turn(
 
 @router.post("/chat/stream", dependencies=[Depends(_verify_api_key)])
 async def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
+    logger.info("Model: %s | user=%s session=%s flow=%s", grok.CHAT_MODEL, request.user_id, request.session_id, request.flow or "none")
     """
     Streaming SSE endpoint. Emits newline-delimited events:
       data: {"type": "chunk", "text": "..."}   — progressive text tokens
