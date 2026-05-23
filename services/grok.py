@@ -14,7 +14,7 @@ _api_key = os.getenv("GROK_API_KEY")
 
 # xAI Grok API endpoint (OpenAI-compatible)
 _GROK_BASE_URL = "https://api.x.ai/v1"
-_GROK_MODEL = "grok-4-1-fast-non-reasoning"
+_GROK_MODEL = "grok-3-mini"
 _GROK_BUILDER_MODEL = "grok-4.3"
 
 # Module-level cached client instances
