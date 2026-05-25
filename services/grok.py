@@ -87,9 +87,14 @@ def generate_builder(prompt: str, system: str | None = None) -> str:
                 temperature=0.7,
                 max_tokens=4096,
                 timeout=60,
+                extra_headers={"x-grok-conv-id": "serey-builder-v1"},
             )
             if not response.choices[0].message.content:
                 raise ValueError("Grok returned empty response")
+            usage = response.usage
+            if usage:
+                cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+                logger.info("Builder usage: prompt=%d cached=%d completion=%d", usage.prompt_tokens, cached, usage.completion_tokens)
             return response.choices[0].message.content
         except Exception as e:
             if attempt == 0:
