@@ -3,6 +3,21 @@ from __future__ import annotations
 from typing import Any
 
 
+SECTION_TYPE_ID_MAP: dict[int, str] = {
+    1: "HERO",
+    2: "ABOUT",
+    3: "GALLERY",
+    4: "FOOTER",
+    5: "VIDEO",
+    6: "VISION",
+    7: "BLOG",
+    8: "TEAM",
+    9: "FAQ",
+    10: "TESTIMONIALS",
+    11: "CUSTOM",
+    12: "RANKING",
+}
+
 SECTION_STYLE_MAP: dict[str, dict[str, Any]] = {
     "HERO": {
         "allowed_styles": tuple(range(0, 7)),
@@ -97,7 +112,15 @@ _ARRAY_UPLOAD_LABELS = {
 
 
 def normalize_section_type(section_type: Any) -> str:
-    return str(section_type or "").upper()
+    """Accepts string names ('HERO'), numeric IDs (1), or numeric strings ('1')."""
+    if isinstance(section_type, int):
+        return SECTION_TYPE_ID_MAP.get(section_type, "")
+    raw = str(section_type or "").strip()
+    # Try numeric string first
+    try:
+        return SECTION_TYPE_ID_MAP.get(int(raw), raw.upper())
+    except ValueError:
+        return raw.upper()
 
 
 def get_default_style(section_type: str) -> int:

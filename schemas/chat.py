@@ -69,6 +69,7 @@ class UploadNeeded(BaseModel):
 
 class StyleSelection(BaseModel):
     section: str = Field(..., description="Section type in lowercase")
+    instance_key: Optional[str] = Field(default=None, description="Unique key for duplicate instances, e.g. 'team_2'")
     style: int = Field(..., description="Resolved style ID for this section")
     is_hidden: bool = Field(default=False, description="Whether the section is hidden")
     style_reason: Optional[str] = Field(
@@ -81,6 +82,10 @@ class BuilderChatResponse(BaseModel):
     """Response from the builder chatbot. Always has a reply; blueprint is present when
     the AI generates or updates a page layout."""
     reply: str = Field(..., description="Conversational reply from the AI")
+    animation_style: Optional[str] = Field(
+        default=None,
+        description="Updated animation style when the user requests a change: none | fade | slide-up | slide-left | blur",
+    )
     uploads_needed: Optional[list[UploadNeeded]] = Field(
         default=None,
         description="Upload prompts the frontend should render when sections need images",

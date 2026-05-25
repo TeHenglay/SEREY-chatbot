@@ -62,6 +62,11 @@ def _normalize_section_styles(layout_sections: list[dict[str, Any]]) -> None:
         section["is_hidden"] = bool(section.get("is_hidden", False))
 
 
+def _instance_key_for(section: dict[str, Any]) -> str:
+    """Return instance_key if set, else fall back to section type string."""
+    return section.get("instance_key") or normalize_section_type(section.get("type"))
+
+
 def _extract_style_reasons(raw_blueprint: Any, raw_patches: Any) -> dict[str, str]:
     reasons: dict[str, str] = {}
     if isinstance(raw_blueprint, dict):
@@ -69,23 +74,24 @@ def _extract_style_reasons(raw_blueprint: Any, raw_patches: Any) -> dict[str, st
             if not isinstance(section, dict):
                 continue
             reason = section.get("style_reason")
-            section_type = normalize_section_type(section.get("type"))
-            if section_type and isinstance(reason, str) and reason.strip():
-                reasons[section_type] = reason.strip()
+            key = _instance_key_for(section)
+            if key and isinstance(reason, str) and reason.strip():
+                reasons[key] = reason.strip()
     if isinstance(raw_patches, list):
         for patch in raw_patches:
             if not isinstance(patch, dict):
                 continue
-            top_reason = patch.get("style_reason")
             section_type = normalize_section_type(patch.get("type"))
-            if section_type and isinstance(top_reason, str) and top_reason.strip():
-                reasons[section_type] = top_reason.strip()
+            key = patch.get("instance_key") or section_type
+            top_reason = patch.get("style_reason")
+            if key and isinstance(top_reason, str) and top_reason.strip():
+                reasons[key] = top_reason.strip()
             updates = patch.get("updates")
             if not isinstance(updates, dict):
                 continue
             reason = updates.get("style_reason")
-            if section_type and isinstance(reason, str) and reason.strip():
-                reasons[section_type] = reason.strip()
+            if key and isinstance(reason, str) and reason.strip():
+                reasons[key] = reason.strip()
     return reasons
 
 
@@ -100,18 +106,31 @@ def _apply_patches_to_layout(
         if not patch_type:
             continue
         action = patch.action
+        patch_instance_key = patch.instance_key
+
+        def _matches(s: dict[str, Any]) -> bool:
+            if normalize_section_type(s.get("type")) != patch_type:
+                return False
+            if patch_instance_key:
+                return s.get("instance_key") == patch_instance_key
+            return True
+
         if action == "delete_block":
-            layout = [s for s in layout if normalize_section_type(s.get("type")) != patch_type]
+            layout = [s for s in layout if not _matches(s)]
             continue
         if action == "add_block":
-            new_section = {"type": patch_type, **deepcopy(patch.updates)}
+            new_section: dict[str, Any] = {"type": patch_type, **deepcopy(patch.updates)}
+            if patch_instance_key:
+                new_section["instance_key"] = patch_instance_key
             layout.append(new_section)
             _normalize_section_styles(layout[-1:])
             continue
         if action == "update_block":
-            target = next((s for s in layout if normalize_section_type(s.get("type")) == patch_type), None)
+            target = next((s for s in layout if _matches(s)), None)
             if target is None:
                 target = {"type": patch_type}
+                if patch_instance_key:
+                    target["instance_key"] = patch_instance_key
                 layout.append(target)
             target.update(deepcopy(patch.updates))
             _normalize_section_styles([target])
@@ -177,12 +196,16 @@ def _styles_selected_from_layout(
         section_type = normalize_section_type(section.get("type"))
         if not section_type:
             continue
-        entry = {
+        instance_key = section.get("instance_key") or None
+        reason_key = instance_key or section_type
+        entry: dict[str, Any] = {
             "section": section_type.lower(),
             "style": int(section.get("style", 1)),
             "is_hidden": bool(section.get("is_hidden", False)),
         }
-        reason = style_reasons.get(section_type)
+        if instance_key:
+            entry["instance_key"] = instance_key
+        reason = style_reasons.get(reason_key)
         if reason:
             entry["style_reason"] = reason
         styles_selected.append(entry)
@@ -196,38 +219,47 @@ def _styles_selected_from_layout(
 BUILDER_SYSTEM_PROMPT = """You are an expert AI page builder for Serey community landing pages (V2).
 Your job is to help users design their landing page through natural conversation.
 
+== SECTION TYPE IDs ==
+Use numeric type IDs in all JSON output:
+  1 = HERO, 2 = ABOUT, 3 = GALLERY, 4 = FOOTER,
+  5 = VIDEO, 6 = VISION, 7 = BLOG, 8 = TEAM,
+  9 = FAQ, 10 = TESTIMONIALS, 11 = CUSTOM, 12 = RANKING
+
 == SECTION REGISTRY ==
 Each page is a JSON array of section objects. Available section types:
 
 CORE (always present unless hidden):
-  HERO        — Top banner: title, subtitle, description, image_url. Styles 0-6.
-  ABOUT       — About us: title, description, image_url. Styles 1-8.
-  GALLERY     — Products/Services/Features: title, description, images[{image_url, name, description}].
+  1 (HERO)    — Top banner: title, subtitle, description, image_url, image_ratio ("16:9"), image_width (null), image_height (null). Styles 0-6.
+  2 (ABOUT)   — About us: title, description, image_url, image_ratio ("16:9"), image_width (null), image_height (null). Styles 1-8.
+  3 (GALLERY) — Products/Services/Features: title, description, images[{image_url, name, description}].
                 IMPORTANT: every image item MUST have image_url (""), name (label), and description (text). Styles 1-16.
-  FOOTER      — Contact/links: title, description, phone, email, location, logo_url, social_links[]. Styles 1-3.
+  4 (FOOTER)  — Contact/links: title, description, phone, email, location, logo_url, social_links[]. Styles 1-3.
                 IMPORTANT: If the user's message contains a phone number, put it in the "phone" field.
                 If it contains an email address, put it in the "email" field.
                 If it contains Facebook/Instagram/Telegram/social links, add them to "social_links" as [{"type":"facebook","handle":"pagename"}].
                 Never leave phone/email blank if the user provided them.
 
 OPTIONAL (add on demand):
-  VIDEO       — Embedded videos: title, description, videos[{url,title,thumbnail}]. Styles 1-5.
-  VISION      — Goals/Vision/Mission: title, description, goals_title, goals_description,
-                vision_title, vision_description, mission_title, mission_description. Styles 1-6.
-  BLOG        — Auto-fetches community posts: title, description only. Styles 1-6.
-  TEAM        — Team members: title, description, members[{name,role,image_url}]. Styles 1,2,4,5,6,7.
-  FAQ         — Q&A list: title, faq_items[{q,a}]. Styles 1-6.
-  TESTIMONIALS— Customer quotes: title, testimonial_items[{name,role,quote,image_url}] (max 6). Styles 1-7.
+  5 (VIDEO)   — Embedded videos: title, description, videos[{url,title,thumbnail}]. Styles 1-5.
+  6 (VISION)  — Goals/Vision/Mission: title, description, goals_title, goals_description,
+                vision_title, vision_description, mission_title, mission_description, image_url. Styles 1-6.
+  7 (BLOG)    — Auto-fetches community posts: title, description only. Styles 1-6.
+  8 (TEAM)    — Team members: title, description, members[{name,role,image_url}]. Styles 1,2,4,5,6,7.
+  9 (FAQ)     — Q&A list: title, faq_items[{question,answer}]. Styles 1-6.
+  10 (TESTIMONIALS) — Customer quotes: title, testimonial_items[{name,role,content,image_url}] (max 6). Styles 1-7.
                 NOTE: style 7 = Cards No Image — omit image_url from items.
-  CUSTOM      — Flexible promo: title, description, button_label, button_url, image_url, image_url_2. Styles 1-6.
-  RANKING     — Auto-fetches top authors: title, description only. Styles 1-4.
+  11 (CUSTOM) — Flexible promo: title, description, button_label, button_url, image_url, image_url_2, image_url_3. Styles 1-6.
+  12 (RANKING)— Auto-fetches top authors: title, description, authors (leave as []). Styles 1-4.
 
 == SECTION OBJECT SHAPE ==
 Every section must include:
-  type        — string, e.g. "HERO" (REQUIRED)
-  style       — integer, e.g. 1 (REQUIRED)
-  is_hidden   — boolean, default false (REQUIRED)
-  colors      — object with keys: title, accent, body, bg  (plus subtitle for HERO; goal_color, vision_color, mission_color for VISION)
+  type              — integer type ID, e.g. 1 for HERO (REQUIRED)
+  style             — integer, e.g. 1 (REQUIRED)
+  is_hidden         — boolean, default false (REQUIRED)
+  instance_key      — string, e.g. "team_1". REQUIRED for all sections. First instance = "{name}_1". Singletons: "hero", "footer".
+  colors            — object with keys: title, accent, body, bg  (plus subtitle for HERO; goal_color, vision_color, mission_color for VISION)
+  bg_image_url      — always set to "" (user-uploaded, AI must never invent URLs)
+  bg_image_opacity  — float 0.0–1.0, default 0.5
 
 == COLOR DEFAULTS ==
   Light section defaults: title="#0f172a"  accent="#2b45a8"  body="#334155"  bg="#ffffff"
@@ -378,43 +410,67 @@ You MUST always return ONLY valid JSON matching this exact envelope:
 {
   "reply": "friendly conversational message to the user",
   "blueprint": {
+    "template": 1,
+    "font": "Roboto",
+    "animation_style": "fade",
     "community_id": <integer>,
     "content": [
       {
-        "type": "HERO",
+        "type": 1,
+        "instance_key": "hero",
         "style": 1,
         "is_hidden": false,
+        "bg_image_url": "",
+        "bg_image_opacity": 0.5,
         "title": "...",
         "subtitle": "...",
         "description": "...",
         "image_url": "",
+        "image_ratio": "16:9",
+        "image_width": null,
+        "image_height": null,
         "colors": { "title": "#eef4ff", "accent": "#3b82f6", "subtitle": "#e2e8f0", "body": "#cbd5e1", "bg": "#0f2044" }
       },
       ...more sections...,
-      { "type": "FOOTER", "style": 1, "is_hidden": false, "title": "Contact Us", ... }
+      { "type": 4, "instance_key": "footer", "style": 1, "is_hidden": false, "bg_image_url": "", "bg_image_opacity": 0.5, "title": "Contact Us", ... }
     ]
   },
   "patches": null
 }
+
+  animation_style options: "none" | "fade" | "slide-up" | "slide-left" | "blur"
+  Pick the animation that matches the brand tone (fade for minimal, slide-up for bold, blur for luxury).
 
 OR when making targeted updates to an existing layout:
 {
   "reply": "...",
   "blueprint": null,
   "patches": [
-    { "action": "update_block", "type": "HERO", "updates": { "title": "New Title" } }
+    { "action": "update_block", "type": "HERO", "instance_key": "hero", "updates": { "title": "New Title" } }
   ]
 }
   action options:
     "add_block"    — adding a NEW section that doesn't exist yet (e.g. user asks to add TEAM, FAQ, VISION)
     "update_block" — modifying fields of an EXISTING section (title, color, style, etc.)
     "delete_block" — removing an existing section
+  instance_key in patches: use to target a specific instance (e.g. "team_2"). Omit if there's only one.
   CRITICAL RULES for patches:
   - ALWAYS use "add_block" (NOT "update_block") for every section that is listed as "NOT on page" in the page context.
   - When user says "add it", "do it", "can you do it for me", "add testimonials", "add vision", etc. — use add_block for EACH requested section. Include real content (title, description, items) in the updates.
   - NEVER send a full blueprint replacement when the user only wants to add or modify specific sections — use patches instead.
   - When adding multiple sections at once, include ALL of them as separate add_block entries in the patches array.
-  - Each add_block MUST include: type, action, and updates with at minimum a "title" field so the section renders.
+  - Each add_block MUST include: type (string name like "TEAM"), action, and updates with at minimum a "title" field so the section renders.
+
+OR when the user asks to change the animation style only:
+{
+  "reply": "Animation changed to fade.",
+  "animation_style": "fade",
+  "blueprint": null,
+  "patches": null
+}
+  Valid animation_style values: "none" | "fade" | "slide-up" | "slide-left" | "blur"
+  IMPORTANT: Include animation_style at the top level of the envelope whenever you change it.
+  When returning a full blueprint, set animation_style inside blueprint AND at the top level.
 
 OR when just answering a question (no layout change):
 {
@@ -450,6 +506,7 @@ OR when just answering a question (no layout change):
 8. Leave BLOG and RANKING sections with only title/description — their data is auto-fetched.
    For FOOTER social_links, always use object format: [{"type": "facebook", "handle": "pagename"}]
    Never use plain strings like ["facebook.com/pagename"].
+   FAQ items use {question, answer} keys. Testimonial items use {name, role, content, image_url} keys.
 9. IMAGES: Whenever you create or update a section with image fields, always include "uploads_needed"
    in your JSON response. Rules:
    - "section" = section type in lowercase (e.g. "hero", "gallery", "about", "team", "custom", "testimonials")
@@ -467,6 +524,9 @@ OR when just answering a question (no layout change):
    If no image fields are affected, set "uploads_needed": null.
    On a full redesign (blueprint), ALWAYS include uploads_needed for every section that has image
    fields — even if page_context had images before. New layout = new upload prompts.
+10. DUPLICATE SECTIONS: You may include multiple instances of the same type (e.g. two FAQ sections).
+    Assign unique instance_key values: first = "{name}_1" (e.g. "faq_1"), second = "{name}_2", etc.
+    Hero and Footer are always singletons — use instance_key "hero" and "footer" respectively.
 """
 
 
@@ -550,17 +610,29 @@ Respond with valid JSON now:
     assert isinstance(data, dict)  # type: narrowing for static analysis
 
     # 4. Extract envelope fields
+    _VALID_ANIMATIONS = {"none", "fade", "slide-up", "slide-left", "blur"}
     try:
         reply: str = data.get("reply") or ""
         raw_blueprint = data.get("blueprint")
         raw_patches = data.get("patches")
         raw_uploads = data.get("uploads_needed")
+        raw_animation = data.get("animation_style")
+        animation_style: str | None = (
+            raw_animation if isinstance(raw_animation, str) and raw_animation in _VALID_ANIMATIONS else None
+        )
     except AttributeError as e:
         logger.error("Envelope extract error: %s | Data: %s", str(e), data)
         raise HTTPException(status_code=422, detail=f"AI returned unexpected format: {str(e)}")
 
     def _normalize_blueprint(raw: dict) -> dict:
         """Fix common AI field name mismatches before Pydantic validation."""
+        # Clamp animation_style to known values
+        valid_animations = {"none", "fade", "slide-up", "slide-left", "blur"}
+        anim = str(raw.get("animation_style") or "fade").lower()
+        raw["animation_style"] = anim if anim in valid_animations else "fade"
+        raw.setdefault("template", 1)
+        raw.setdefault("font", "")
+
         for section in raw.get("content", []):
             section_type = normalize_section_type(section.get("type"))
             if section_type:
@@ -574,21 +646,30 @@ Respond with valid JSON now:
                     style,
                 )
             section["style"] = style
+            # Always clear bg_image_url — it's user-uploaded, not AI-generated
+            section["bg_image_url"] = ""
+            section.setdefault("bg_image_opacity", 0.5)
             # Gallery images: normalize field names + ensure name/description exist
             for img in section.get("images", []) or []:
                 if "url" in img and "image_url" not in img:
                     img["image_url"] = img.pop("url")
                 if "title" in img and "name" not in img:
                     img["name"] = img.pop("title")
-                # Never carry over a non-empty image_url from a redesign — only keep if it
-                # was explicitly set to a real CDN URL (starts with http). If AI invented
-                # a URL or copied a wrong one it gets cleared to "".
                 url = img.get("image_url", "")
                 if url and not url.startswith("http"):
                     img["image_url"] = ""
-                # Ensure name and description always exist
                 img.setdefault("name", "")
                 img.setdefault("description", "")
+            # FAQ: normalize q/a → question/answer
+            for item in section.get("faq_items", []) or []:
+                if "q" in item and "question" not in item:
+                    item["question"] = item.pop("q")
+                if "a" in item and "answer" not in item:
+                    item["answer"] = item.pop("a")
+            # Testimonials: normalize quote → content
+            for item in section.get("testimonial_items", []) or []:
+                if "quote" in item and "content" not in item:
+                    item["content"] = item.pop("quote")
             # Footer social_links: {platform} → {type}
             for link in section.get("social_links", []) or []:
                 if "platform" in link and "type" not in link:
@@ -676,6 +757,7 @@ Respond with valid JSON now:
 
     return BuilderChatResponse(
         reply=reply,
+        animation_style=animation_style,
         blueprint=blueprint,
         patches=patches,
         uploads_needed=uploads_needed,
