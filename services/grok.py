@@ -104,7 +104,7 @@ def generate_builder(prompt: str, system: str | None = None) -> str:
                 raise
 
 
-def generate_text(prompt: str, system: str | None = None) -> str:
+def generate_text(prompt: str, system: str | None = None, max_tokens: int = 800) -> str:
     """Send a prompt to Grok and return a plain text response (for chatbot use)."""
     client = _get_client()
     messages = _build_messages(prompt, system)
@@ -114,7 +114,7 @@ def generate_text(prompt: str, system: str | None = None) -> str:
                 model=_GROK_MODEL,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=800,
+                max_tokens=max_tokens,
                 timeout=25,
             )
             if not response.choices[0].message.content:

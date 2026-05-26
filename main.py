@@ -14,6 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from routes.builder import router as builder_router
 from routes.chat import router as chat_router
 from routes.builder_chat import router as builder_chat_router
+from routes.categorize import router as categorize_router
 from services.knowledge_sync import sync_knowledge
 import logging
 import os
@@ -74,19 +75,28 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="AI Website Builder API", lifespan=lifespan)
 
-_ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://localhost:3030,"
+        "http://127.0.0.1:3000,http://127.0.0.1:3030",
+    ).split(",")
+    if o.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Authorization", "X-Serey-Api-Key"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
 )
 
 app.include_router(builder_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(builder_chat_router, prefix="/api")
+app.include_router(categorize_router, prefix="/api")
 
 
 @app.get("/health")
