@@ -91,7 +91,41 @@ app.include_router(builder_chat_router, prefix="/api")
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    from datetime import datetime, timezone
+    from services.search import get_all_component_names
+    from services.grok import check_api_status
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + \
+                f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
+
+    db_ok = True
+    try:
+        names = get_all_component_names()
+        db_ok = bool(names)
+    except Exception:
+        db_ok = False
+    api_status = check_api_status()
+    model_ok = api_status["reachable"]
+    quota_ok = api_status["quota_ok"]
+    queue_ok = _scheduler.running
+
+    healthy = db_ok and model_ok and quota_ok and queue_ok
+
+    body = {
+        "status": "ok" if healthy else "degraded",
+        "timestamp": timestamp,
+        "services": {
+            "database": db_ok,
+            "model_loaded": model_ok,
+            "quota_ok": quota_ok,
+            "queue": queue_ok,
+        },
+        "version": "1.0.0",
+    }
+
+    if not healthy:
+        return JSONResponse(status_code=503, content=body)
+    return body
 
 
 @app.get("/ready")

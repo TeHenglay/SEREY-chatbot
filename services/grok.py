@@ -163,13 +163,29 @@ async def stream_text(prompt: str, system: str | None = None):
                 raise
 
 
-def test_connection() -> bool:
-    """Returns True if Grok is reachable, False otherwise."""
+def check_api_status() -> dict:
+    """
+    Returns {"reachable": bool, "quota_ok": bool}.
+    Distinguishes quota exhaustion (429) from other failures so callers
+    can surface the difference in health/monitoring endpoints.
+    """
+    from openai import RateLimitError
+
+    if not os.getenv("GROK_API_KEY"):
+        return {"reachable": False, "quota_ok": True}
     try:
-        if not os.getenv("GROK_API_KEY"):
-            return False
         result = generate('Return this exact JSON: {"status": "connected"}')
-        return "connected" in result
+        ok = "connected" in result
+        return {"reachable": ok, "quota_ok": True}
+    except RateLimitError as e:
+        logger.error("Grok quota/rate-limit exceeded: %s", str(e))
+        return {"reachable": True, "quota_ok": False}
     except Exception as e:
-        logger.error("Grok test_connection failed: %s", str(e))
-        return False
+        logger.error("Grok check_api_status failed: %s", str(e))
+        return {"reachable": False, "quota_ok": True}
+
+
+def test_connection() -> bool:
+    """Returns True if Grok is reachable and quota is available."""
+    status = check_api_status()
+    return status["reachable"] and status["quota_ok"]
