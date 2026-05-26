@@ -32,7 +32,7 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 # In-memory fallback cache: community_name → (categories, fetched_at)
 _CAT_CACHE: dict[str, tuple[list[dict], float]] = {}
-_CAT_CACHE_TTL = 86400  # 24 hours
+_CAT_CACHE_TTL = 604800  # 7 days — Node.js invalidates serey:categories:* on any category mutation
 
 _redis: aioredis.Redis | None = None
 _redis_available = True  # flipped to False on first connection failure
