@@ -591,42 +591,73 @@ def transform_country_list(data) -> dict:
 
 def transform_subscription_plans(data) -> dict:
     """GET /api/v2/subscription/list-all-subscriptions"""
+    _DISPLAY_NAMES = {
+        "serey_link":   "Serey Link",
+        "homepage":     "Homepage Plan",
+        "business_hub": "Commerce Plan",
+        "publishing":   "Publishing Plan",
+        "premium_hub":  "Premium Plan",
+        "superhub":     "Superhub",
+    }
+
     items = data if isinstance(data, list) else (data.get("subscriptions") or data.get("data") or data.get("plans") or [])
     if not isinstance(items, list):
         items = []
 
-    cambodia: list[str] = []
-    international: list[str] = []
+    # Collect per plan_type: components (once) + prices per region+duration_type
+    from collections import defaultdict
+    plans: dict = defaultdict(lambda: {"components": [], "cambodia": {}, "international": {}})
 
     for p in items:
         if not isinstance(p, dict):
             continue
-        name = p.get("name", "")
-        price = p.get("price", "")
-        duration = p.get("duration", "")
-        duration_type = p.get("duration_type", "")
+        plan_type = p.get("plan_type", "")
+        if not plan_type:
+            continue
         region = (p.get("region") or "").lower()
+        duration_type = (p.get("duration_type") or "").lower()
+        price = p.get("price", "")
         components = p.get("allowed_components") or []
 
-        comp_str = f" — includes: {', '.join(components[:6])}{', +more' if len(components) > 6 else ''}" if components else ""
-        line = f"{name}: ${price} / {duration} {duration_type}{comp_str}"
+        bucket = plans[plan_type]
+        if components and not bucket["components"]:
+            bucket["components"] = components
 
-        if region == "cambodia":
-            cambodia.append(line)
-        else:
-            international.append(line)
+        region_key = "cambodia" if region == "cambodia" else "international"
+        if duration_type in ("month", "monthly"):
+            bucket[region_key]["monthly"] = price
+        elif duration_type in ("year", "yearly", "annual", "annually"):
+            bucket[region_key]["yearly"] = price
 
-    parts = ["Serey subscription plans (visit /social-media-owners to view and purchase):"]
-    if cambodia:
-        parts.append("Cambodia plans: " + "; ".join(cambodia) + ".")
-    if international:
-        parts.append("International plans: " + "; ".join(international) + ".")
+    if not plans:
+        return {"title": "Serey Subscription Plans", "content": "Serey subscription plans data unavailable."}
 
-    return {
-        "title": "Serey Subscription Plans",
-        "content": " ".join(parts) if (cambodia or international) else
-            "Serey subscription plans data unavailable.",
-    }
+    type_order = ["serey_link", "homepage", "business_hub", "publishing", "premium_hub", "superhub"]
+    ordered = [t for t in type_order if t in plans] + [t for t in plans if t not in type_order]
+
+    lines = []
+    for pt in ordered:
+        info = plans[pt]
+        display = _DISPLAY_NAMES.get(pt, pt.replace("_", " ").title())
+        comp_str = f" (includes: {', '.join(info['components'])})" if info["components"] else ""
+
+        pricing_parts = []
+        for region_label, region_key in [("Cambodia", "cambodia"), ("International", "international")]:
+            r = info[region_key]
+            if r.get("yearly"):
+                pricing_parts.append(f"{region_label}: ${r['yearly']}/yr")
+            elif r.get("monthly"):
+                pricing_parts.append(f"{region_label}: ${r['monthly']}/mo")
+
+        price_str = ", ".join(pricing_parts)
+        lines.append(f"{display}{comp_str} — {price_str}" if price_str else f"{display}{comp_str}")
+
+    content = (
+        "Serey offers 6 subscription plans. Visit /social-media-owners to purchase. "
+        + " | ".join(lines)
+        + "."
+    )
+    return {"title": "Serey Subscription Plans", "content": content}
 
 
 def transform_legacy_shop_categories(data) -> dict:
