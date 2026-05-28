@@ -590,23 +590,11 @@ def transform_country_list(data) -> dict:
 
 
 def transform_subscription_plans(data) -> dict:
-    """
-    GET /api/v2/subscription/list-all-subscriptions
-    Response: list or { data: [...] } of plan objects.
-
-    Plan tiers (lowest → highest):
-      basic_type1  — Landing Page, Online Shop
-      basic_type2  — + Blog, Gallery, Media & Video, Fundraising, Marketplace, Micro Blog, Serey Link
-      premium      — All components (premium)
-      superhub     — All components (top-tier)
-
-    Downgrading from premium/superhub to basic_type1 is blocked.
-    """
+    """GET /api/v2/subscription/list-all-subscriptions"""
     items = data if isinstance(data, list) else (data.get("subscriptions") or data.get("data") or data.get("plans") or [])
     if not isinstance(items, list):
         items = []
 
-    # Group by region
     cambodia: list[str] = []
     international: list[str] = []
 
@@ -617,25 +605,18 @@ def transform_subscription_plans(data) -> dict:
         price = p.get("price", "")
         duration = p.get("duration", "")
         duration_type = p.get("duration_type", "")
-        plan_type = p.get("plan_type", "")
         region = (p.get("region") or "").lower()
         components = p.get("allowed_components") or []
 
-        comp_str = f", unlocks: {', '.join(components[:6])}{' +more' if len(components) > 6 else ''}" if components else ""
-        line = f"{name} — ${price} / {duration} {duration_type} (tier: {plan_type}{comp_str})"
+        comp_str = f" — includes: {', '.join(components[:6])}{', +more' if len(components) > 6 else ''}" if components else ""
+        line = f"{name}: ${price} / {duration} {duration_type}{comp_str}"
 
         if region == "cambodia":
             cambodia.append(line)
         else:
             international.append(line)
 
-    parts = []
-    parts.append(
-        "Serey offers subscription plans with 4 tiers: basic_type1 (Landing Page + Online Shop), "
-        "basic_type2 (adds Blog, Gallery, Media & Video, Fundraising, Marketplace, Micro Blog, Serey Link), "
-        "premium (all components), and superhub (all components, top-tier). "
-        "Downgrading from premium or superhub to basic_type1 is not allowed."
-    )
+    parts = ["Serey subscription plans (visit /social-media-owners to view and purchase):"]
     if cambodia:
         parts.append("Cambodia plans: " + "; ".join(cambodia) + ".")
     if international:
