@@ -104,7 +104,7 @@ def generate_builder(prompt: str, system: str | None = None) -> str:
                 raise
 
 
-def generate_text(prompt: str, system: str | None = None, max_tokens: int = 800) -> str:
+def generate_text(prompt: str, system: str | None = None, max_tokens: int = 1500) -> str:
     """Send a prompt to Grok and return a plain text response (for chatbot use)."""
     client = _get_client()
     messages = _build_messages(prompt, system)
@@ -115,7 +115,7 @@ def generate_text(prompt: str, system: str | None = None, max_tokens: int = 800)
                 messages=messages,
                 temperature=0.7,
                 max_tokens=max_tokens,
-                timeout=25,
+                timeout=40,
             )
             if not response.choices[0].message.content:
                 raise ValueError("Grok returned empty response")
@@ -144,9 +144,9 @@ async def stream_text(prompt: str, system: str | None = None):
                 model=_GROK_MODEL,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=800,
+                max_tokens=1500,
                 stream=True,
-                timeout=25,
+                timeout=40,
             )
             async for chunk in response:
                 if not chunk.choices:

@@ -1,0 +1,55 @@
+{
+  "description": "Retrieval evaluation set for the Serey knowledge base. Each case is a realistic user query plus the chunk title(s) that SHOULD appear in the retrieved context. A case passes if at least one of its expect_any title substrings is present in the chunks returned by services.search.search_serey_knowledge(). Run: python eval/run_eval.py",
+  "cases": [
+    {"query": "where can I buy products on serey", "expect_any": ["Serey Marketplace", "Shops on Serey", "Product Categories"], "domain": "marketplace"},
+    {"query": "how do I open my own shop and start selling", "expect_any": ["How to Open a Shop on Serey"], "domain": "marketplace"},
+    {"query": "what product categories do you have", "expect_any": ["Product Categories on Serey", "Serey Marketplace"], "domain": "marketplace"},
+    {"query": "where is the shopping cart", "expect_any": ["Serey Marketplace Routes", "Serey Marketplace"], "domain": "marketplace"},
+    {"query": "how do I check out and pay for my order", "expect_any": ["Serey Marketplace Routes", "Payment Methods on Serey", "Serey Marketplace"], "domain": "marketplace"},
+
+    {"query": "what payment methods can I use", "expect_any": ["Payment Methods on Serey"], "domain": "payments"},
+    {"query": "do you accept ABA bank or Wing money", "expect_any": ["Payment Methods on Serey"], "domain": "payments"},
+
+    {"query": "how do I earn commission by referring people", "expect_any": ["Referral Rewards Program"], "domain": "earning"},
+    {"query": "is there a referral program on serey", "expect_any": ["Referral Rewards Program"], "domain": "earning"},
+    {"query": "can creators get equity in serey", "expect_any": ["Creator Ownership Program"], "domain": "earning"},
+    {"query": "what is the creator ownership program", "expect_any": ["Creator Ownership Program"], "domain": "earning"},
+    {"query": "how can I invest in serey", "expect_any": ["For Investors"], "domain": "earning"},
+    {"query": "is serey an LLC or C corporation", "expect_any": ["For Investors"], "domain": "earning"},
+    {"query": "how do I make money on serey", "expect_any": ["Referral Rewards Program", "Creator Ownership Program", "How to Open a Shop on Serey"], "domain": "earning"},
+
+    {"query": "how do I write and publish a blog post", "expect_any": ["Serey Core Navigation"], "domain": "platform"},
+    {"query": "where do I watch videos on serey", "expect_any": ["Serey Social Features", "Serey Communities and Features"], "domain": "platform"},
+    {"query": "how do I take a quiz", "expect_any": ["Serey Social Features", "Serey Communities and Features"], "domain": "platform"},
+    {"query": "where can I share my photos", "expect_any": ["Serey Social Features", "Serey Communities and Features"], "domain": "platform"},
+    {"query": "what is drums on serey", "expect_any": ["Serey Social Features", "Serey Communities and Features"], "domain": "platform"},
+
+    {"query": "what communities can I join", "expect_any": ["Serey Community Pages", "Serey Communities and Features"], "domain": "community"},
+    {"query": "is there a netherlands community", "expect_any": ["Serey Community Pages"], "domain": "community"},
+    {"query": "tell me about the cambodia community", "expect_any": ["Serey Community Pages"], "domain": "community"},
+
+    {"query": "what is serey", "expect_any": ["About Serey — Our Story", "Who is Serey guide bot", "Serey Marketplace"], "domain": "about"},
+    {"query": "who founded serey", "expect_any": ["Serey Founder"], "domain": "about"},
+    {"query": "who are you and what can you help me with", "expect_any": ["Who is Serey guide bot"], "domain": "about"},
+    {"query": "what is the SRY token", "expect_any": ["Serey Frequently Asked Questions"], "domain": "about"},
+    {"query": "what is a superhub", "expect_any": ["Serey Frequently Asked Questions"], "domain": "about"},
+
+    {"query": "how do I contact support", "expect_any": ["Serey Support and Contact"], "domain": "support"},
+    {"query": "what is your email address", "expect_any": ["Serey Support and Contact"], "domain": "support"},
+
+    {"query": "how much does advertising cost on serey", "expect_any": ["Advertise on Serey"], "domain": "advertising"},
+    {"query": "can I advertise my business on serey", "expect_any": ["Advertise on Serey"], "domain": "advertising"},
+
+    {"query": "what is the weather in cambodia", "expect_any": ["Weather"], "domain": "services"},
+    {"query": "how do I get a visa for cambodia", "expect_any": ["Cambodia Visa Guide"], "domain": "services"},
+    {"query": "where can I book a bus ticket", "expect_any": ["BookMeBus"], "domain": "services"},
+    {"query": "what are the best places to visit in cambodia", "expect_any": ["Places to Visit in Cambodia"], "domain": "services"},
+    {"query": "how do I report an online scam", "expect_any": ["Police Online Reporting"], "domain": "services"},
+    {"query": "can foreigners get cambodian citizenship", "expect_any": ["Cambodian Citizenship by Investment"], "domain": "services"},
+
+    {"query": "what languages does serey support", "expect_any": ["Supported Languages on Serey"], "domain": "platform"},
+
+    {"query": "where do I change my profile settings", "expect_any": ["Serey Core Navigation"], "domain": "navigation"},
+    {"query": "where is my wallet", "expect_any": ["Serey Core Navigation"], "domain": "navigation"}
+  ]
+}

@@ -43,7 +43,7 @@ async def sync_knowledge() -> dict:
     Full sync. Returns summary:
       { "indexed": int, "shops_synced": int, "products_synced": int, "errors": list[str] }
     """
-    from scripts.serey_knowledge_catalog import SEREY_KNOWLEDGE
+    from scripts.serey_knowledge_catalog import SEREY_KNOWLEDGE, CONTEXTUAL_PREFIXES
     from scripts.serey_api_config import (
         SEREY_MARKET_BASE,
         COMMUNITY_IDS_TO_SYNC,
@@ -420,22 +420,18 @@ async def sync_knowledge() -> dict:
         merged[chunk["id"]] = chunk
 
     # ------------------------------------------------------------------
-    # Re-index ChromaDB
+    # Build the document/metadata/id lists (no DB interaction yet)
     # ------------------------------------------------------------------
-    client_db = chromadb.PersistentClient(path=_CHROMA_PATH)
-    try:
-        client_db.delete_collection("serey_knowledge")
-    except Exception:
-        pass
-
-    collection = client_db.create_collection(
-        name="serey_knowledge",
-        metadata={"hnsw:space": "cosine"},
-    )
-
     documents, metadatas, ids = [], [], []
     for chunk in merged.values():
-        doc_text = f"{chunk['title']}\n\n{chunk['content']}"
+        # Apply contextual prefix for embedding if defined — improves retrieval for long chunks.
+        # The prefix is NOT stored in metadata, so prompts always receive clean original content.
+        prefix = CONTEXTUAL_PREFIXES.get(chunk["id"], "")
+        doc_text = (
+            f"{prefix}\n\n{chunk['title']}\n\n{chunk['content']}"
+            if prefix
+            else f"{chunk['title']}\n\n{chunk['content']}"
+        )
         documents.append(doc_text)
         metadatas.append({
             "id": chunk["id"],
@@ -445,8 +441,34 @@ async def sync_knowledge() -> dict:
         })
         ids.append(chunk["id"])
 
-    collection.add(documents=documents, metadatas=metadatas, ids=ids)
-    total_indexed = collection.count()
+    # ------------------------------------------------------------------
+    # Re-index ChromaDB. The delete→create→add sequence can intermittently
+    # raise "Collection [uuid] does not exist" due to a stale client cache,
+    # which would otherwise wipe the KB without repopulating it. Retry with a
+    # fresh client to guarantee the collection is left populated.
+    # ------------------------------------------------------------------
+    total_indexed = 0
+    last_err: Exception | None = None
+    for attempt in range(1, 4):
+        client_db = chromadb.PersistentClient(path=_CHROMA_PATH)
+        try:
+            try:
+                client_db.delete_collection("serey_knowledge")
+            except Exception:
+                pass
+            collection = client_db.create_collection(
+                name="serey_knowledge",
+                metadata={"hnsw:space": "cosine"},
+            )
+            collection.add(documents=documents, metadatas=metadatas, ids=ids)
+            total_indexed = collection.count()
+            break
+        except Exception as e:
+            last_err = e
+            logger.warning("Re-index attempt %d failed: %s", attempt, e)
+    else:
+        # All attempts failed — surface the error rather than returning a wiped KB silently.
+        raise RuntimeError(f"Failed to re-index serey_knowledge after 3 attempts: {last_err}")
 
     summary = {
         "indexed": total_indexed,

@@ -96,11 +96,11 @@ SEREY_KNOWLEDGE = [
         ),
     },
     {
-        "id": "serey_routes",
+        "id": "serey_routes_core",
         "category": "navigation",
-        "title": "Serey Platform Pages and Routes",
+        "title": "Serey Core Navigation — Home, Feed, Blog, Account",
         "content": (
-            "Key pages and routes on the Serey platform: "
+            "Core pages and routes on Serey: "
             "/ — Home page. "
             "/feed — Feed page (call it 'Feed', never 'Main Feed'). "
             "/blog — Blog landing page. "
@@ -111,6 +111,27 @@ SEREY_KNOWLEDGE = [
             "/blog/post/edit — Edit a post. "
             "/blog/post/draft — Draft posts. "
             "/blog/categories/[[...slug]] — Category/nested pages. "
+            "/authors/[name] — Author profile. "
+            "/authors/[name]/[permalink] — Author post detail. "
+            "/authors/[name]/premium/[permalink] — Premium author post. "
+            "/authors/[name]/my-activity — Author activity. "
+            "/signup — Account registration. "
+            "/reset-password — Password reset flow. "
+            "/profile-setting — Profile and account settings. "
+            "/my/wallet — User wallet. "
+            "/my/notifications — User notifications. "
+            "/my/login-devices — Active device and login sessions. "
+            "/social-media-owners — Community manager/owner tools and subscription plan purchase. "
+            "/social-media-owners/community-settings — Community settings. "
+            "Note: Login is handled through a modal, there is no dedicated login page."
+        ),
+    },
+    {
+        "id": "serey_routes_market",
+        "category": "navigation",
+        "title": "Serey Marketplace Routes",
+        "content": (
+            "All Serey Marketplace pages and routes: "
             "/sereymarket — Main marketplace hub. "
             "/sereymarket/category — Marketplace category page. "
             "/sereymarket/shop — Shop directory. "
@@ -122,17 +143,15 @@ SEREY_KNOWLEDGE = [
             "/sereymarket/myproduct — Manage product listings. "
             "/sereymarket/payment-setup — Seller payment setup. "
             "/sereymarket/slideshowdashboard — Marketplace dashboard. "
-            "/sereymarket/telegram-bot — Marketplace bot integration. "
-            "/signup — Account registration. "
-            "/reset-password — Password reset flow. "
-            "/profile-setting — Profile and account settings. "
-            "/my/wallet — User wallet. "
-            "/my/notifications — User notifications. "
-            "/my/login-devices — Active device and login sessions. "
-            "/authors/[name] — Author profile. "
-            "/authors/[name]/[permalink] — Author post detail. "
-            "/authors/[name]/premium/[permalink] — Premium author post. "
-            "/authors/[name]/my-activity — Author activity. "
+            "/sereymarket/telegram-bot — Marketplace Telegram bot integration."
+        ),
+    },
+    {
+        "id": "serey_routes_social",
+        "category": "navigation",
+        "title": "Serey Social Features — Gallery, Drums, Quiz, Smartvey, Video",
+        "content": (
+            "Social feature pages and routes on Serey: "
             "/gallery — Gallery landing page. "
             "/gallery/new — Create gallery content. "
             "/gallery/trending — Trending gallery content. "
@@ -166,55 +185,68 @@ SEREY_KNOWLEDGE = [
             "/quiz/admin/quiz/[id] — Quiz admin quiz detail. "
             "/quiz/admin/ranking — Quiz admin ranking page. "
             "/quiz/admin/setting — Quiz admin settings. "
-            "/social-media-owners — Community manager/owner tools. "
-            "/social-media-owners/community-settings — Community settings. "
-            "/social-media-owners — Buy a community subscription plan and manage owner tools. "
-            "/cambodia — Cambodia community. "
-            "/cambodia/serey-ai — Serey AI tools page (this is a page, NOT a community). "
-            "/usa — USA community. "
-            "/usa/sport — USA sports. "
-            "/netherlands — Netherlands community. "
-            "/vrij-nederland — Vrij Nederland. "
-            "/web3-nederland — Web3 Nederland. "
-            "/voetbal — Football landing. "
-            "/khmer-ball — Khmer Ball. "
-            "/shadow-of-utopia — Shadow of Utopia. "
-            "/smartvey — Smartvey landing. "
+            "/smartvey — Smartvey landing (survey and data features). "
             "/smartvey/contact-us — Smartvey contact. "
             "/smartvey/condition — Smartvey conditions. "
             "/smartvey/sponsorship — Smartvey sponsorship. "
             "/smartvey/vision-and-goal — Smartvey vision. "
             "/smartvey/who-we-are — Smartvey company info. "
-            "/serey-link — Serey Link. "
-            "/serey-wallet — Serey Wallet. "
-            "/serey-apps — Serey Apps listing page (this is a page, NOT a community). "
+            "/video-component — Video platform landing. "
+            "/video-component/watch — Video watch page."
+        ),
+    },
+    {
+        "id": "serey_routes_community",
+        "category": "navigation",
+        "title": "Serey Community Pages",
+        "content": (
+            "Community and partner pages on Serey. "
+            "IMPORTANT: /cambodia/serey-ai and /serey-apps are PAGES, not communities — never suggest them as communities to join. "
+            "/cambodia — Cambodia community. "
+            "/cambodia/serey-ai — Serey AI tools page (this is a PAGE, NOT a community). "
+            "/usa — USA community. "
+            "/usa/sport — USA sports community. "
+            "/netherlands — Netherlands community. "
+            "/vrij-nederland — Vrij Nederland community. "
+            "/web3-nederland — Web3 Nederland community. "
+            "/voetbal — Football/Voetbal community. "
+            "/khmer-ball — Khmer Ball community. "
+            "/shadow-of-utopia — Shadow of Utopia community. "
+            "/serey-apps — Serey Apps listing page (this is a PAGE, NOT a community). "
+            "/serey-link — Serey Link page. "
+            "/serey-wallet — Serey Wallet page. "
             "/pdoge — Pdoge landing. "
             "/pdoge/about-us — Pdoge about. "
             "/pdoge/donate — Pdoge donation. "
-            "/video-component — Video platform landing. "
-            "/video-component/watch — Video watch page. "
+            "/kc-university-post — KC University content."
+        ),
+    },
+    {
+        "id": "serey_routes_info",
+        "category": "navigation",
+        "title": "Serey Info, Programs, Legal & Cambodia Pages",
+        "content": (
+            "Informational, program, legal, and Cambodia-related pages on Serey: "
             "/about-us — About Serey. "
             "/faq — Help and support page. "
+            "/founders — Founders page. "
+            "/alliances — Alliances page. "
+            "/statistics — Platform statistics. "
+            "/referral-rewards — Referral Rewards Program: earn 20%-25% commission per platform subscription referred. "
+            "/creator-ownership-program — Creator Ownership Program: build Serey together, earn phantom equity participation. "
+            "/investors — Investor information: Serey's vision, traction, business model, and investment opportunity. "
             "/privacy-policy — Privacy policy. "
             "/term-of-service — Terms of service. "
             "/rules-and-values — Rules and values. "
-            "/security-disclosure-program — Security disclosure. "
+            "/security-disclosure-program — Security disclosure program. "
             "/platform-plan-terms — Platform plan terms. "
-            "/founders — Founders. "
-            "/alliances — Alliances. "
-            "/statistics — Platform statistics. "
-            "/kc-university-post — KC University content. "
             "/bookmebus — Book bus, ferry, and train tickets across Cambodia and Southeast Asia. "
             "/cambodian-citizenship-by-investment — Overview and application for the Cambodian Citizenship by Investment program. "
             "/places-to-visit-cambodia — Discover top tourist destinations and attractions in Cambodia. "
             "/cambodia-visa-guide — Comprehensive guide to Cambodian visas, e-visas, and extensions. "
             "/cambodia-payments-guide — Guide to currency (USD/KHR), cash, cards, and mobile payments in Cambodia. "
             "/police-online-reporting — Official portal for reporting scams, fraud, and online crimes in Cambodia. "
-            "/cambodia-travel-weather-guide — Practical travel tips and weather information for Cambodia. "
-            "/referral-rewards — Referral Rewards Program: earn 20%-25% commission per platform subscription referred. "
-            "/creator-ownership-program — Creator Ownership Program: build Serey together, earn phantom equity participation. "
-            "/investors — Investor information: Serey's vision, traction, business model, and investment opportunity. "
-            "Note: Login is handled through a modal, there is no dedicated login page."
+            "/cambodia-travel-weather-guide — Practical travel tips and weather information for Cambodia."
         ),
     },
     {
@@ -624,3 +656,59 @@ SEREY_KNOWLEDGE = [
     # Then re-run: python scripts/index_serey_knowledge.py
     # -----------------------------------------------------------------------
 ]
+
+# Contextual prefixes prepended to a chunk's EMBEDDED text only (not the stored content).
+# The embedding model (all-MiniLM-L6-v2) truncates input at 256 tokens (~1,000 chars), so any
+# chunk longer than that loses its tail at the embedding layer — making tail sub-topics hard to
+# find. A short prefix front-loads ALL of the chunk's sub-topics into the first 256 tokens so the
+# whole chunk stays findable. The prompt still receives the full original content from metadata.
+# Based on Anthropic's Contextual Retrieval technique (Sept 2024).
+CONTEXTUAL_PREFIXES: dict[str, str] = {
+    "serey_investors": (
+        "This chunk describes Serey's investment opportunity for investors and venture partners: "
+        "business model and revenue, traction metrics (10,000+ monthly active users, 100,000+ page "
+        "views, ~30 partners including B2B Cambodia, Sabay, SmartVey, Digital One), growth strategy, "
+        "stablecoin payments (USDT, USDC), company structure (US-based LLC, possible future "
+        "C-Corporation), and how to contact the team to invest."
+    ),
+    "serey_creator_ownership_program": (
+        "This chunk describes Serey's Creator Ownership Program: how creators can earn phantom equity "
+        "participation (0.1%-1%), the 7 focus sectors, creator activities that unlock milestones, "
+        "the private creator dashboard, and how to apply via contact@serey.io."
+    ),
+    "serey_overview": (
+        "This chunk describes what Serey is, its founding story in 2018, its mission of digital "
+        "sovereignty and censorship resistance, how blockchain is used, and how anyone can create "
+        "a social publishing platform on Serey without technical skills."
+    ),
+    "serey_faq": (
+        "This chunk answers frequently asked questions about Serey: what the platform is, what a "
+        "Superhub is, the SRY token, how users earn tokens, available tools (CMS, AI builder), "
+        "subdomain options, and how to get started."
+    ),
+    "serey_routes_social": (
+        "Routes and pages for Serey's social features: watching and uploading videos (video-component), "
+        "playing and creating quizzes and exams, browsing and posting to the photo gallery, "
+        "drums short-form updates, and smartvey surveys."
+    ),
+    "serey_routes_info": (
+        "Routes for Serey's informational, legal, and program pages: about us, FAQ and help, founders, "
+        "alliances, statistics, referral rewards, creator ownership program, investors, privacy policy, "
+        "terms of service, and Cambodia travel, visa, payment, and weather guides."
+    ),
+    "serey_advertising": (
+        "This chunk describes advertising and sponsorship options on Serey: exclusive partner spots, "
+        "premium frontpage placement, and SmartVey student-exposure packages, with pricing, discounts, "
+        "placements, and audience statistics for advertisers."
+    ),
+    "serey_guide_bot_identity": (
+        "This chunk answers who you are and what you can help with: who are you, what are you, what can "
+        "you do, what can you help me with, are you a bot, who am I chatting with. You are Serey guide "
+        "bot, the official AI assistant for the Serey platform."
+    ),
+    "serey_support": (
+        "This chunk explains how to contact Serey and get help: the support email address "
+        "(contact@serey.io), what is your email, how do I reach you, the Telegram channel (@sereyio), "
+        "and the FAQ help page for customer support."
+    ),
+}
