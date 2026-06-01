@@ -211,6 +211,9 @@ SEREY_KNOWLEDGE = [
             "/cambodia-payments-guide — Guide to currency (USD/KHR), cash, cards, and mobile payments in Cambodia. "
             "/police-online-reporting — Official portal for reporting scams, fraud, and online crimes in Cambodia. "
             "/cambodia-travel-weather-guide — Practical travel tips and weather information for Cambodia. "
+            "/referral-rewards — Referral Rewards Program: earn 20%-25% commission per platform subscription referred. "
+            "/creator-ownership-program — Creator Ownership Program: build Serey together, earn phantom equity participation. "
+            "/investors — Investor information: Serey's vision, traction, business model, and investment opportunity. "
             "Note: Login is handled through a modal, there is no dedicated login page."
         ),
     },
@@ -491,6 +494,128 @@ SEREY_KNOWLEDGE = [
             "Placement: Smartvey main page, top Quiz page, top Blog page, top Gallery page. "
             "Benefits: Direct visibility to thousands of active medical students.\n\n"
             "To advertise, contact: contact@serey.io or Telegram: @sereyio"
+        ),
+    },
+    {
+        "id": "serey_referral_rewards",
+        "category": "earning",
+        "title": "Referral Rewards Program — Earn Commission on Serey",
+        "content": (
+            "Serey's Referral Rewards Program lets you earn extra money while helping Serey grow. "
+            "Receive 20%–25% commission on every successful platform subscription you refer. "
+            "Earn up to $54 per subscription referral. There is no limit — refer as many people as you want.\n\n"
+            "How It Works:\n"
+            "1. Share your unique referral link with content creators, businesses, and organizations.\n"
+            "2. A new user registers on Serey through your referral link.\n"
+            "3. They purchase a Serey platform subscription plan.\n"
+            "4. You automatically receive your commission — no extra steps needed.\n\n"
+            "Referral Dashboard:\n"
+            "Track your referrals, commissions, and earnings through the Referral Dashboard, accessible directly from your account settings. "
+            "You can access your unique referral link, monitor referral signups, and follow the growth of your referral network.\n\n"
+            "Who Can You Refer?\n"
+            "Content creators, influencers, journalists, media companies, sports clubs, businesses, "
+            "educational organizations, non-profit organizations, communities, and associations.\n\n"
+            "Frequently Asked Questions:\n"
+            "Q: When do I receive my commission? "
+            "A: Commissions are credited once a referred user successfully purchases a qualifying platform subscription.\n"
+            "Q: Is there a limit to how many people I can refer? "
+            "A: No. There is no limit to the number of referrals you can make.\n"
+            "Q: How can I track my referrals and earnings? "
+            "A: Monitor your referral activity, commissions, and earnings through the Referral Dashboard in your account settings.\n"
+            "Q: Does it cost anything to participate? "
+            "A: No. Joining the Referral Rewards Program is completely free.\n\n"
+            "Route: /referral-rewards"
+        ),
+    },
+    {
+        "id": "serey_creator_ownership_program",
+        "category": "earning",
+        "title": "Creator Ownership Program — Build Serey Together",
+        "content": (
+            "Creators generate billions in value — but capture only a fraction of it. "
+            "Large platforms control distribution and take a significant share of revenue, while many creators receive only a small portion of the value they create. "
+            "Serey is built to change this: a platform where creators can grow, monetize, and participate in the value they help build.\n\n"
+            "What Serey Offers:\n"
+            "Serey combines blogs, video, podcasts, online shops, fundraising, communities, and more into one integrated platform. "
+            "Creators can build their own publishing platform, grow their audience, and monetize more independently while actively contributing to the growth of the ecosystem. "
+            "By joining Serey early, you can: build a direct and independent relationship with your audience; "
+            "create multiple revenue streams through advertisement, products, and donations; "
+            "grow alongside an emerging ecosystem focused on long-term creator participation; "
+            "and benefit from early opportunities within the platform's growth and expansion.\n\n"
+            "Who We Target:\n"
+            "Undervalued Creators — creators who consistently produce strong content but have not yet reached their full potential. "
+            "On most platforms, only a small percentage earn enough to make a living. Serey focuses on these high-quality voices. "
+            "Top Creators — we are also open to collaborating with top-tier creators who can help scale the platform and shape its future.\n\n"
+            "Focus Sectors (current focus):\n"
+            "Science & Education, Homesteading & Sustainability, Liberty & Independent Media, Sports, Tech / AI & Web3, Business & Entrepreneurship, Poker.\n\n"
+            "Phantom Equity Participation:\n"
+            "To support ecosystem growth, Serey may allocate up to 2% phantom equity participation per sector to selected creators, communities, and strategic contributors — based on long-term contribution, activity, and ecosystem growth. "
+            "Selected partners may receive 0.1%–1% growth participation — performance-based, no legal or ownership complexity. "
+            "As Serey grows, you benefit from the value you help create.\n\n"
+            "Creator Activities:\n"
+            "Examples of participation: building a homepage and SereyLink on Serey; using SereyLink to drive traffic and onboard users; "
+            "growing activity and audience engagement on their Serey platform; using Serey as a primary publishing hub while complementing with external platforms. "
+            "Phantom equity may gradually unlock as creators complete milestones and contribute to ecosystem growth.\n\n"
+            "Creator Dashboard:\n"
+            "Selected creators get access to a private dashboard showing: your participation agreement with Serey; "
+            "your phantom equity participation within the platform; the milestones and steps required to unlock additional participation.\n\n"
+            "How to Join:\n"
+            "Serey is starting with a select group of creators in this early phase. "
+            "Contact Serey at contact@serey.io or Telegram: @sereyio to express interest and explore this together.\n\n"
+            "Route: /creator-ownership-program"
+        ),
+    },
+    {
+        "id": "serey_investors",
+        "category": "about",
+        "title": "For Investors — Building the Future of Independent Publishing",
+        "content": (
+            "Serey is building the infrastructure for the next generation creator economy, "
+            "allowing creators and communities to easily launch, monetize, and scale their own independent platforms.\n\n"
+            "Overview:\n"
+            "Today, a handful of large technology companies capture most of the value created by users and creators "
+            "while also controlling what content gets promoted or censored. Serey aims to build a more balanced alternative "
+            "by giving creators, communities, and users greater control over their platforms, monetization, and content — "
+            "shifting more power and value back to the people who contribute to the ecosystem.\n\n"
+            "The Platform:\n"
+            "Serey is building an all-in-one publishing ecosystem that enables creators, communities, and media platforms "
+            "to launch and grow their own independent platform. Core components: "
+            "Publishing tools (blogs, videos, galleries, podcasts, and more); "
+            "Monetization (subscriptions, donations, commerce, and advertising); "
+            "Independent platforms (customizable homepages and communities); "
+            "Growth infrastructure (partnerships, media networks, and distribution). "
+            "Unlike traditional platforms that focus on a single channel, Serey combines multiple tools into one integrated ecosystem.\n\n"
+            "Traction:\n"
+            "10,000+ monthly active users across the platform. "
+            "100,000+ monthly page views and growing engagement. "
+            "Nearly 30 strategic partners, including B2B Cambodia, Sabay, and Shadows of Utopia. "
+            "Increasing creator, publishing, and e-commerce activity across the ecosystem. "
+            "Expansion toward international markets through Serey US and Serey Netherlands. "
+            "Integrated payment infrastructure supporting Cambodian banks, Visa/Mastercard, and stablecoins such as USDT and USDC.\n\n"
+            "Key Partners: SmartVey (Cambodia's largest quiz platform), Digital One (one of Cambodia's largest entertainment companies), "
+            "B2B Cambodia (news company focusing on business content).\n\n"
+            "Growth Strategy:\n"
+            "Current focus: scaling the platform internationally through strategic collaborations, ecosystem expansion, and network-driven growth. "
+            "Key areas: collaborating with creators, publishers, media platforms, and online communities to launch and migrate their platforms to Serey; "
+            "exploring partnerships with technology platforms such as web browsers, alternative internet ecosystems, and large online communities; "
+            "expanding the e-commerce ecosystem through integrated payment systems including domestic bank payments, Visa/Mastercard, and digital assets. "
+            "Serey uses referral and partner systems to incentivize creators, businesses, and communities to onboard new users and ecosystems.\n\n"
+            "Business Model:\n"
+            "Serey generates revenue through platform subscription plans, e-commerce transaction fees, and advertising systems. "
+            "Creators, businesses, and communities monetize through subscriptions, online shops, donations, and commercial activity, "
+            "while Serey earns revenue by providing the infrastructure and tools that support these ecosystems. "
+            "The business model is designed to align platform growth with creator and partner success.\n\n"
+            "Company Structure:\n"
+            "Serey operates through a US-based LLC, enabling international operations and integration with global payment infrastructure. "
+            "Structured to support international growth, partnerships, and future scalability, "
+            "with potential plans to transition toward a C Corporation structure as the ecosystem expands.\n\n"
+            "Investment Opportunity:\n"
+            "Serey is entering a phase focused on international growth and ecosystem expansion. "
+            "We are open to discussions with investors and strategic partners who can contribute through capital, networks, strategic guidance, or long-term collaboration. "
+            "We look for alignment with our vision around decentralization, digital sovereignty, and more independent online ecosystems, "
+            "and the ability to support growth through networks, strategic partnerships, or market access.\n\n"
+            "Investor Inquiry: contact@serey.io\n\n"
+            "Route: /investors"
         ),
     },
     # -----------------------------------------------------------------------
