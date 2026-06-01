@@ -711,4 +711,10 @@ CONTEXTUAL_PREFIXES: dict[str, str] = {
         "(contact@serey.io), what is your email, how do I reach you, the Telegram channel (@sereyio), "
         "and the FAQ help page for customer support."
     ),
+    "serey_founder": (
+        "This chunk answers who founded, created, started, or is behind Serey: the founder of Serey "
+        "is Chhay Lem Lim, who founded the platform, his vision and background, and his hands-on role "
+        "working with developers in Cambodia. Who is the founder, who created Serey, who made Serey, "
+        "who started Serey, who runs Serey."
+    ),
 }

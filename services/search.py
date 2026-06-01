@@ -92,7 +92,7 @@ _CATEGORY_HINTS: list[tuple[list[str], str]] = [
     (["weather", "temperature", "rain", "forecast", "climate"], "general"),
     (["payment", "bank", "aba", "wing", "pay", "transfer", "money", "wallet"], "payments"),
     (["support", "help", "contact", "email", "telegram"], "support"),
-    (["about", "founder", "history", "story", "mission", "traction"], "about"),
+    (["about", "founder", "found", "create", "made", "behind", "ceo", "owner", "history", "story", "mission", "traction"], "about"),
 ]
 
 
