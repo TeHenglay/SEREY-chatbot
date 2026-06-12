@@ -20,6 +20,7 @@ SECTION_TYPE_ID_MAP: dict[int, str] = {
     10: "TESTIMONIALS",
     11: "CUSTOM",
     12: "RANKING",
+    13: "SUBSCRIPTION",
 }
 
 _SECTION_TYPE_NAME_TO_ID: dict[str, int] = {v: k for k, v in SECTION_TYPE_ID_MAP.items()}
@@ -112,6 +113,7 @@ SECTION_TYPES = Literal[
     "HERO", "ABOUT", "GALLERY", "FOOTER",
     "VIDEO", "VISION", "BLOG", "TEAM",
     "FAQ", "TESTIMONIALS", "CUSTOM", "RANKING",
+    "SUBSCRIPTION",
 ]
 
 
@@ -120,6 +122,10 @@ class SectionBlock(BaseModel):
 
     type: SECTION_TYPES = Field(..., description="Section type string, e.g. 'HERO' (stored as string, serialized as int)")
     style: int = Field(1, description="Style variant number (see layout_policy for options per type)")
+    section_subtype: str | None = Field(
+        None,
+        description="GALLERY (type 3) only: 'gallery' (photo) or 'product' (cards with name+description)",
+    )
     is_hidden: bool = Field(False)
     instance_key: str | None = Field(None, description="Unique key for duplicate section instances, e.g. 'team_1'")
     colors: dict[str, str] | None = Field(
@@ -138,15 +144,26 @@ class SectionBlock(BaseModel):
     image_ratio: str | None = None
     image_width: int | None = None
     image_height: int | None = None
+    image_shape: str | None = Field(
+        None,
+        description="HERO/ABOUT image_url shape: square | rounded | circle | arch | diamond | hexagon | blob | star",
+    )
 
     # --- GALLERY ---
     images: list[GalleryImage] | None = None
+
+    # --- BLOG ---
+    feed_type: str | None = Field(
+        None, description="BLOG (type 7): 'trending' (default) or 'latest'"
+    )
 
     # --- FOOTER ---
     phone: str | None = None
     email: str | None = None
     location: str | None = None
     logo_url: str | None = None
+    privacy_url: str | None = Field(None, description="FOOTER: privacy policy link (styles 2, 5)")
+    terms_url: str | None = Field(None, description="FOOTER: terms of service link (styles 2, 5)")
     social_links: list[SocialLink] | None = None
 
     @field_validator("social_links", mode="before")

@@ -20,20 +20,22 @@ Generate a complete landing page JSON blueprint from the user's description.
 Each page is a JSON array of section objects. Available section types:
 
 CORE:
-  HERO        — title, subtitle, description, image_url. Styles 0-6.
-  ABOUT       — title, description, image_url. Styles 1-8.
-  GALLERY     — title, description, images[{image_url,name,description}]. Styles 1-16.
-  FOOTER      — title, description, phone, email, location, logo_url, social_links[{type,handle}]. Styles 1-3.
+  HERO        — title, subtitle, description, image_url, image_shape. Styles 1,2,3,5,7,8. (style 3 = centered text-only, no image)
+  ABOUT       — title, description, image_url, image_shape. Styles 1,2,4,5,7,8,10,11. (styles 5,8 = text-only, no image)
+  GALLERY     — REQUIRES section_subtype: "gallery" (photos, items={image_url}, styles 1-9,11,12) OR
+                "product" (cards, items={image_url,name,description}, styles 1-5). Title, description, images[].
+  FOOTER      — title, description, phone, email, location, logo_url, social_links[{type,handle}], privacy_url, terms_url. Styles 1,2,3,4,5.
 
 OPTIONAL:
-  VIDEO       — title, description, videos[{url,title,thumbnail}].
-  VISION      — title, description, goals_title, goals_description, vision_title, vision_description, mission_title, mission_description. Styles 1-6.
-  BLOG        — title, description only (data auto-fetched).
-  TEAM        — title, description, members[{name,role,image_url}].
-  FAQ         — title, faq_items[{q,a}].
-  TESTIMONIALS— title, testimonial_items[{name,role,quote,image_url}] (max 6).
-  CUSTOM      — title, description, button_label, button_url, image_url, image_url_2. Styles 1-6.
-  RANKING     — title, description only (data auto-fetched).
+  VIDEO       — title, description, videos[{url,title,thumbnail}]. Styles 1,2,3,4.
+  VISION      — title, description, goals_title, goals_description, vision_title, vision_description, mission_title, mission_description. Styles 1-7.
+  BLOG        — title, description, feed_type ("trending"|"latest") only (posts auto-fetched). Styles 1-6.
+  TEAM        — title, description, members[{name,role,image_url}]. Styles 1,2,4,5,6,7,8.
+  FAQ         — title, faq_items[{question,answer}]. Styles 1-7.
+  TESTIMONIALS— title, testimonial_items[{name,role,content,image_url}] (max 6). Styles 1,3,4,5,6,7,9,10. (style 7 = no images)
+  CUSTOM      — title, description, button_label, button_url, image_url, image_shape. Styles 1-7.
+  RANKING     — title, description only (data auto-fetched). Style 1.
+  SUBSCRIPTION— title, description only. Style 1.
 
 == SECTION RECOMMENDATIONS BY SITE TYPE ==
   Online Shop:     HERO, ABOUT, GALLERY, TESTIMONIALS, FAQ, FOOTER
@@ -49,10 +51,10 @@ OPTIONAL:
   Hero accent default: "#c0392b"
 
 == STYLE GUIDE ==
-  Clean/Minimal:  Hero 1, About 1, Gallery 2,  Custom 3
-  Cinematic/Bold: Hero 2, About 7, Gallery 4,  Custom 4
-  Magazine:       Hero 5, About 4, Gallery 13, Custom 6
-  Dark/Dramatic:  Hero 6, About 8, Gallery 10, Custom 4
+  Clean/Minimal:  Hero 3, About 5, Gallery(product) 1, Custom 3
+  Cinematic/Bold: Hero 2, About 7, Gallery(photo) 4,   Custom 4
+  Magazine:       Hero 7, About 11, Gallery(photo) 12,  Custom 7
+  Dark/Dramatic:  Hero 8, About 8, Gallery(photo) 7,   Custom 4
 
 == RULES ==
 1. Return ONLY valid JSON — no markdown, no backticks, no text outside the JSON.
@@ -60,7 +62,9 @@ OPTIONAL:
 3. Set community_id to the value provided in context.
 4. Always set image_url to "" — never invent image URLs.
 5. Use the user's preferences from memory to personalise color and style choices.
-6. Output schema:
+6. GALLERY (type 3) MUST include section_subtype: "gallery" (photos) or "product" (cards w/ name+description).
+   Never use "project" — emit "product". Never mix style numbers between the two subtypes.
+7. Output schema:
 {
   "community_id": <integer>,
   "content": [ ...section objects... ]

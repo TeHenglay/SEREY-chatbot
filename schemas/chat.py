@@ -86,6 +86,10 @@ class BuilderChatResponse(BaseModel):
         default=None,
         description="Updated animation style when the user requests a change: none | fade | slide-up | slide-left | blur",
     )
+    font: Optional[str] = Field(
+        default=None,
+        description="Updated global font name when the user requests a font-only change (e.g. 'Poppins').",
+    )
     uploads_needed: Optional[list[UploadNeeded]] = Field(
         default=None,
         description="Upload prompts the frontend should render when sections need images",

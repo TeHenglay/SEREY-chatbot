@@ -16,77 +16,100 @@ SECTION_TYPE_ID_MAP: dict[int, str] = {
     10: "TESTIMONIALS",
     11: "CUSTOM",
     12: "RANKING",
+    13: "SUBSCRIPTION",
 }
 
+# Builder V2 style/section contract. See BUILDER_V2_AI_BACKEND.md.
+#
+# GALLERY (type 3) is split by `section_subtype`:
+#   - 'gallery' (photo)   -> GallerySection, styles 1-9,11,12
+#   - 'product'/'project' -> ProductSection, styles 1-5
+# The product variant lives under the virtual key "GALLERY_PRODUCT" below and is
+# selected via _resolve_style_key(). It is NOT a real section type id.
+#
+# rendered_fields lists the IMAGE/array fields a given style actually renders, so
+# uploads_needed only prompts for slots the chosen style will show. Styles tagged
+# [IMG: none] in the spec (e.g. hero 3, about 5/8, testimonials 7) render no image.
 SECTION_STYLE_MAP: dict[str, dict[str, Any]] = {
     "HERO": {
-        "allowed_styles": tuple(range(0, 7)),
-        "rendered_fields": {style: ("image_url",) for style in range(0, 7)},
+        "allowed_styles": (1, 2, 3, 5, 7, 8),
+        "rendered_fields": {
+            1: ("image_url",),  # Two Column [optional]
+            2: ("image_url",),  # Full-Bleed Cinematic [required]
+            3: (),              # Centered — NO image
+            5: ("image_url",),  # Magazine Split [required]
+            7: ("image_url",),  # Editorial Magazine Cover [optional]
+            8: ("image_url",),  # Padded Card [required]
+        },
     },
     "ABOUT": {
-        "allowed_styles": tuple(range(1, 9)),
+        "allowed_styles": (1, 2, 4, 5, 7, 8, 10, 11),
         "rendered_fields": {
             1: ("image_url",),
             2: ("image_url",),
-            3: ("image_url",),
             4: ("image_url",),
-            5: (),
-            6: (),
+            5: (),               # Text only
             7: ("image_url",),
-            8: (),
+            8: (),               # Panel text only
+            10: ("image_url",),
+            11: ("image_url",),
         },
     },
+    # Photo gallery (section_subtype: 'gallery')
     "GALLERY": {
-        "allowed_styles": tuple(range(1, 17)),
-        "rendered_fields": {style: ("images",) for style in range(1, 17)},
+        "allowed_styles": (1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12),
+        "rendered_fields": {
+            style: ("images",) for style in (1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12)
+        },
+    },
+    # Product/service/feature cards (section_subtype: 'product' or 'project')
+    "GALLERY_PRODUCT": {
+        "allowed_styles": (1, 2, 3, 4, 5),
+        "rendered_fields": {style: ("images",) for style in (1, 2, 3, 4, 5)},
     },
     "FOOTER": {
-        "allowed_styles": (1, 2, 3),
-        "rendered_fields": {
-            1: ("logo_url",),
-            2: ("logo_url",),
-            3: ("logo_url",),
-        },
+        "allowed_styles": (1, 2, 3, 4, 5),
+        "rendered_fields": {style: ("logo_url",) for style in (1, 2, 3, 4, 5)},
     },
     "VIDEO": {
-        "allowed_styles": (1, 2, 3, 4, 5),
-        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5)},
+        "allowed_styles": (1, 2, 3, 4),
+        "rendered_fields": {style: () for style in (1, 2, 3, 4)},
     },
     "VISION": {
-        "allowed_styles": tuple(range(1, 7)),
-        "rendered_fields": {style: () for style in range(1, 7)},
+        "allowed_styles": (1, 2, 3, 4, 5, 6, 7),
+        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5, 6, 7)},
     },
     "BLOG": {
         "allowed_styles": (1, 2, 3, 4, 5, 6),
         "rendered_fields": {style: () for style in (1, 2, 3, 4, 5, 6)},
     },
     "TEAM": {
-        "allowed_styles": (1, 2, 4, 5, 6, 7),
-        "rendered_fields": {style: ("members",) for style in (1, 2, 4, 5, 6, 7)},
+        "allowed_styles": (1, 2, 4, 5, 6, 7, 8),
+        "rendered_fields": {style: ("members",) for style in (1, 2, 4, 5, 6, 7, 8)},
     },
     "FAQ": {
-        "allowed_styles": (1, 2, 3, 4, 5, 6),
-        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5, 6)},
+        "allowed_styles": (1, 2, 3, 4, 5, 6, 7),
+        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5, 6, 7)},
     },
     "TESTIMONIALS": {
-        "allowed_styles": (1, 2, 3, 4, 5, 6, 7),
-        # style 7 = Cards No Image — no image uploads needed
-        "rendered_fields": {**{style: ("testimonial_items",) for style in (1, 2, 3, 4, 5, 6)}, 7: ()},
-    },
-    "CUSTOM": {
-        "allowed_styles": tuple(range(1, 7)),
+        "allowed_styles": (1, 3, 4, 5, 6, 7, 9, 10),
+        # style 7 = Cards No Image — no avatar uploads needed
         "rendered_fields": {
-            1: ("image_url",),
-            2: ("image_url",),
-            3: ("image_url",),
-            4: ("image_url",),
-            5: ("image_url",),
-            6: ("image_url", "image_url_2"),
+            **{style: ("testimonial_items",) for style in (1, 3, 4, 5, 6, 9, 10)},
+            7: (),
         },
     },
+    "CUSTOM": {
+        "allowed_styles": (1, 2, 3, 4, 5, 6, 7),
+        "rendered_fields": {style: ("image_url",) for style in (1, 2, 3, 4, 5, 6, 7)},
+    },
     "RANKING": {
-        "allowed_styles": (1, 2, 3, 4),
-        "rendered_fields": {style: () for style in (1, 2, 3, 4)},
+        "allowed_styles": (1,),
+        "rendered_fields": {1: ()},
+    },
+    "SUBSCRIPTION": {
+        "allowed_styles": (1,),
+        "rendered_fields": {1: ()},
     },
 }
 
@@ -96,18 +119,21 @@ _ARRAY_FIELD_IMAGE_KEY = {
     "testimonial_items": "image_url",
 }
 
+# Labels are keyed by the resolved STYLE KEY (uppercase), so the photo gallery and
+# product gallery — both section type "gallery" — get distinct upload labels.
 _SCALAR_UPLOAD_LABELS = {
-    ("hero", "image_url"): "Hero Background",
-    ("about", "image_url"): "About Section Image",
-    ("custom", "image_url"): "Custom Section Image",
-    ("custom", "image_url_2"): "Custom Section Image 2",
-    ("footer", "logo_url"): "Footer Logo",
+    ("HERO", "image_url"): "Hero Background",
+    ("ABOUT", "image_url"): "About Section Image",
+    ("CUSTOM", "image_url"): "Custom Section Image",
+    ("CUSTOM", "image_url_2"): "Custom Section Image 2",
+    ("FOOTER", "logo_url"): "Footer Logo",
 }
 
 _ARRAY_UPLOAD_LABELS = {
-    ("gallery", "images"): "Product {n} — Image",
-    ("team", "members"): "Team Member {n} Photo",
-    ("testimonials", "testimonial_items"): "Reviewer {n} Avatar",
+    ("GALLERY", "images"): "Gallery Photo {n}",
+    ("GALLERY_PRODUCT", "images"): "Product {n} — Image",
+    ("TEAM", "members"): "Team Member {n} Photo",
+    ("TESTIMONIALS", "testimonial_items"): "Reviewer {n} Avatar",
 }
 
 
@@ -123,43 +149,79 @@ def normalize_section_type(section_type: Any) -> str:
         return raw.upper()
 
 
-def get_default_style(section_type: str) -> int:
-    styles = SECTION_STYLE_MAP.get(section_type, {}).get("allowed_styles", (1,))
+def normalize_gallery_subtype(section: dict[str, Any]) -> str | None:
+    """Return the cleaned subtype for a GALLERY section, else None.
+
+    'gallery' stays 'gallery' (photo). Anything else ('product', 'project',
+    unknown) collapses to 'product' — the frontend normalizes the same way and
+    expects 'product' on the wire. When absent, infer from item content: items
+    carrying a name/description are products; bare images are a photo gallery.
+    """
+    if normalize_section_type(section.get("type")) != "GALLERY":
+        return None
+    raw = str(section.get("section_subtype") or "").strip().lower()
+    if raw == "gallery":
+        return "gallery"
+    if raw:
+        return "product"
+    for item in section.get("images") or []:
+        if isinstance(item, dict) and (
+            str(item.get("name") or "").strip() or str(item.get("description") or "").strip()
+        ):
+            return "product"
+    return "gallery"
+
+
+def _resolve_style_key(section_type: str, section_subtype: Any = None) -> str:
+    """Map (section_type, subtype) to the SECTION_STYLE_MAP key."""
+    if section_type == "GALLERY":
+        sub = str(section_subtype or "").strip().lower()
+        if sub and sub != "gallery":
+            return "GALLERY_PRODUCT"
+        return "GALLERY"
+    return section_type
+
+
+def get_default_style(section_type: str, section_subtype: Any = None) -> int:
+    key = _resolve_style_key(section_type, section_subtype)
+    styles = SECTION_STYLE_MAP.get(key, {}).get("allowed_styles", (1,))
     return int(styles[0])
 
 
-def normalize_style(section_type: str, style: Any) -> tuple[int, bool]:
-    if section_type not in SECTION_STYLE_MAP:
+def normalize_style(section_type: str, style: Any, section_subtype: Any = None) -> tuple[int, bool]:
+    key = _resolve_style_key(section_type, section_subtype)
+    if key not in SECTION_STYLE_MAP:
         try:
             return int(style), False
         except (TypeError, ValueError):
             return 1, True
-    allowed = SECTION_STYLE_MAP[section_type]["allowed_styles"]
+    allowed = SECTION_STYLE_MAP[key]["allowed_styles"]
     try:
         parsed = int(style)
     except (TypeError, ValueError):
-        return get_default_style(section_type), True
+        return get_default_style(section_type, section_subtype), True
     if parsed not in allowed:
-        return get_default_style(section_type), True
+        return get_default_style(section_type, section_subtype), True
     return parsed, False
 
 
-def get_rendered_fields(section_type: str, style: Any) -> tuple[str, ...]:
+def get_rendered_fields(section_type: str, style: Any, section_subtype: Any = None) -> tuple[str, ...]:
     section_type = normalize_section_type(section_type)
-    if section_type not in SECTION_STYLE_MAP:
+    key = _resolve_style_key(section_type, section_subtype)
+    if key not in SECTION_STYLE_MAP:
         return ()
-    normalized_style, _ = normalize_style(section_type, style)
-    return tuple(SECTION_STYLE_MAP[section_type]["rendered_fields"].get(normalized_style, ()))
+    normalized_style, _ = normalize_style(section_type, style, section_subtype)
+    return tuple(SECTION_STYLE_MAP[key]["rendered_fields"].get(normalized_style, ()))
 
 
 def _is_empty_upload_value(v: Any) -> bool:
     return not isinstance(v, str) or not v.strip()
 
 
-def _slot_label(section_lower: str, field: str, index: int | None) -> str:
+def _slot_label(style_key: str, section_lower: str, field: str, index: int | None) -> str:
     if index is None:
-        return _SCALAR_UPLOAD_LABELS.get((section_lower, field), f"{section_lower.title()} {field}")
-    template = _ARRAY_UPLOAD_LABELS.get((section_lower, field), f"{section_lower.title()} Item {{n}} Image")
+        return _SCALAR_UPLOAD_LABELS.get((style_key, field), f"{section_lower.title()} {field}")
+    template = _ARRAY_UPLOAD_LABELS.get((style_key, field), f"{section_lower.title()} Item {{n}} Image")
     return template.format(n=index + 1)
 
 
@@ -169,9 +231,11 @@ def collect_rendered_upload_slots(layout_sections: list[dict[str, Any]]) -> list
         section_type = normalize_section_type(section.get("type"))
         if not section_type or section.get("is_hidden", False):
             continue
-        style, _ = normalize_style(section_type, section.get("style"))
+        subtype = section.get("section_subtype")
+        style_key = _resolve_style_key(section_type, subtype)
+        style, _ = normalize_style(section_type, section.get("style"), subtype)
         section_lower = section_type.lower()
-        for field in get_rendered_fields(section_type, style):
+        for field in get_rendered_fields(section_type, style, subtype):
             if field in _ARRAY_FIELD_IMAGE_KEY:
                 image_field = _ARRAY_FIELD_IMAGE_KEY[field]
                 for idx, item in enumerate(section.get(field) or []):
@@ -182,7 +246,7 @@ def collect_rendered_upload_slots(layout_sections: list[dict[str, Any]]) -> list
                             "section": section_lower,
                             "field": field,
                             "index": idx,
-                            "label": _slot_label(section_lower, field, idx),
+                            "label": _slot_label(style_key, section_lower, field, idx),
                             "missing": _is_empty_upload_value(item.get(image_field)),
                         }
                     )
@@ -191,7 +255,7 @@ def collect_rendered_upload_slots(layout_sections: list[dict[str, Any]]) -> list
                     {
                         "section": section_lower,
                         "field": field,
-                        "label": _slot_label(section_lower, field, None),
+                        "label": _slot_label(style_key, section_lower, field, None),
                         "missing": _is_empty_upload_value(section.get(field)),
                     }
                 )
