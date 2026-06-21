@@ -9,34 +9,25 @@ SEREY_KNOWLEDGE = [
         "category": "about",
         "title": "About Serey — Our Story",
         "content": (
-            "Serey is a publishing platform built on the belief that every voice deserves a home — free from censorship, owned by its creator. "
-            "Build your platform. Own your audience. Tell your story — free from censorship, owned entirely by you.\n\n"
+            "Serey is a publishing platform built on the belief that every creator deserves a complete, affordable, and truly owned online presence.\n\n"
             "What is Serey? "
-            "Serey is a publishing platform that lets creators, journalists, and media companies launch customizable websites and online shops with no coding required. "
-            "Instead of just building websites, Serey allows you to create fully customizable social publishing platforms — all without the need for technical skills.\n\n"
-            "Our Purpose — Digital Sovereignty and Freedom: "
-            "Serey was founded with a powerful mission: to bring digital sovereignty and freedom back to the people. "
-            "In today's digital landscape, major social media corporations hold vast centralized power, silencing voices, censoring ideas, and shaping public opinion. "
-            "Serey was created to counter this control and restore the freedom for people to build social publishing platforms they can fully own and govern. "
-            "Censorship Resistant: your content, your rules — no central authority can silence your voice. "
-            "Full Ownership: own your platform, your data, and your community. "
-            "Global Access: publish freely to audiences anywhere in the world.\n\n"
-            "History — Origins: "
-            "2018: Serey was born in response to growing concerns over big tech's power to control and suppress information. "
-            "Revelations by whistleblowers exposed how centralized platforms could manipulate public opinion. "
-            "We recognized blockchain's potential to store and distribute content globally — making censorship nearly impossible and removing centralized points of control. "
-            "Today: a fully-featured publishing platform empowering creators worldwide to build spaces for free expression, unbounded by centralized authority. "
-            "Founded in 2018. Global platform. Zero coding required. 100% free expression.\n\n"
-            "Growth — From Local Beginnings to Global Impact: "
-            "What began as a solution for news and blogging in Cambodia quickly grew into a global platform. "
-            "Serey shifted from being a localized blog-sharing platform to a decentralized infrastructure, "
-            "empowering people worldwide to create their own social publishing platforms. "
-            "Today, Serey provides anyone with the tools to build a space for free expression, unbounded by the limitations of centralized authority.\n\n"
-            "How to Create Your Own Social Publishing Platform: "
-            "Creating a social publishing platform on Serey is simple and intuitive. "
-            "Users select from a variety of components — such as a landing page, blog, microblog, fundraising tools, or marketplace — "
-            "to build a platform perfectly suited to their community's needs. "
-            "This allows each creator to design a space that truly reflects their unique vision and values, free from outside interference or censorship. "
+            "Serey is an all-in-one publishing platform that lets creators, journalists, and small businesses build their own website, blog, online shop, "
+            "podcast, video channel, community, and more — all in one place, without any technical skills required. "
+            "Instead of managing multiple tools like WordPress, Shopify, Substack, and Linktree separately and expensively, "
+            "Serey brings everything together in one simple platform that you truly own.\n\n"
+            "Our Mission: "
+            "Serey was founded with a simple but powerful belief — creators should own their platform, their audience, and their earnings. "
+            "Today, most creators depend on platforms that control their reach, take large commissions, and can remove their content or account at any time. "
+            "Serey was built to change that by giving every creator the tools to build and grow independently.\n\n"
+            "One Platform, Everything You Need: build your website, blog, shop, podcast, community, and more from one simple CMS — no coding or design experience needed. "
+            "Affordable and Transparent: stop paying hundreds of dollars managing multiple tools separately; Serey gives you everything at a fraction of the cost with no hidden fees. "
+            "Protect Your Work: Serey gives creators the option to timestamp their content, creating a permanent proof of authorship that protects their hard-earned work from plagiarism. "
+            "Full Control: customize and manage your platform, content, and community exactly the way you want.\n\n"
+            "Our Story: "
+            "Serey was founded in 2018 with a simple mission — to give creators a better alternative to the fragmented and expensive tools available at the time. "
+            "What started as a small publishing platform has grown into a global platform empowering creators and small businesses worldwide. "
+            "Today Serey is growing its creator base across Southeast Asia, Europe, and beyond — with a mission to become the go-to platform for independent creators everywhere. "
+            "Serey operates through a registered LLC in the United States, enabling global partnerships and payment integrations. "
             "Route: /about-us"
         ),
     },
@@ -232,6 +223,7 @@ SEREY_KNOWLEDGE = [
             "/founders — Founders page. "
             "/alliances — Alliances page. "
             "/statistics — Platform statistics. "
+            "/sereyexplorer/explorer — Serey Explorer: browse blockchain-verified posts (proof of authorship and ownership). "
             "/referral-rewards — Referral Rewards Program: earn 20%-25% commission per platform subscription referred. "
             "/creator-ownership-program — Creator Ownership Program: build Serey together, earn phantom equity participation. "
             "/investors — Investor information: Serey's vision, traction, business model, and investment opportunity. "
@@ -254,11 +246,13 @@ SEREY_KNOWLEDGE = [
         "category": "payments",
         "title": "Payment Methods on Serey",
         "content": (
-            "Serey supports the following payment methods: "
-            "ABA Bank (QR code and online bank transfer), "
-            "Wing Money, "
-            "Pi Pay, "
-            "Cash on Delivery — available in Phnom Penh and major Cambodian cities."
+            "Accept payments from anywhere in the world. "
+            "Serey supports multiple payment methods so your audience can support you however they prefer: "
+            "credit and debit cards (Visa and Mastercard) through Stripe, "
+            "or crypto stablecoin payments received directly to your wallet. "
+            "Local Cambodian payment methods are also supported on the marketplace: "
+            "ABA Bank (QR code and online bank transfer), Wing Money, Pi Pay, "
+            "and Cash on Delivery — available in Phnom Penh and major Cambodian cities."
         ),
     },
     {
@@ -287,34 +281,24 @@ SEREY_KNOWLEDGE = [
         "category": "support",
         "title": "Serey Frequently Asked Questions",
         "content": (
+            "Everything you need to know about building, growing, and monetizing your platform on Serey.\n\n"
             "General:\n"
             "Q: What is Serey? "
-            "A: Serey is a Web3 publishing platform that allows anyone to create their own online platform. "
-            "Users can build websites tailored to their audience using tools such as blogs, video pages, galleries, online shops, and more.\n"
-            "Q: What is a Superhub? "
-            "A: A Superhub is a platform that connects multiple smaller platforms around a shared topic such as Web3, sports, or political news. "
-            "It brings content, communities, and platforms together into one ecosystem.\n"
-            "Q: Can anyone create a platform on Serey? "
-            "A: Yes. Anyone can create their own platform on Serey. You can choose your topic, publish content, grow a community, "
-            "and connect your platform to existing Superhubs.\n\n"
-            "Platform & Tools:\n"
-            "Q: Do I need technical skills to build a platform? "
-            "A: No. Serey includes an intuitive CMS and an AI website builder that allow you to create and manage your platform without any technical knowledge.\n"
-            "Q: What domain or app options are available? "
-            "A: Platforms receive a free subdomain such as platformname.serey.io. "
-            "Platforms or Superhubs can also request a dedicated branded mobile app.\n"
-            "Q: Who controls the content on each platform? "
-            "A: Platform owners control and are responsible for the content they publish. Each platform operates independently within the Serey ecosystem.\n\n"
-            "Crypto & Rewards:\n"
-            "Q: Does Serey have its own token? "
-            "A: Yes. Serey uses the SRY token, which powers the ecosystem and can be used for rewards, governance, and transactions.\n"
-            "Q: How can users earn SRY tokens? "
-            "A: Users can earn SRY by publishing content, curating posts through voting, and participating actively in the ecosystem.\n"
-            "Q: Is it free to post and interact on Serey? "
-            "A: Yes. Posting, commenting, and voting on content are completely free.\n\n"
-            "Getting Started:\n"
-            "Q: How do I get started on Serey? "
-            "A: You can create an account, start a platform, publish content, or participate in existing communities — all from the Serey homepage. "
+            "A: Serey allows you to create a complete all-in-one platform inexpensively in one place. "
+            "Instead of managing multiple platforms like WordPress, Substack, Shopify, Canva, Linktree, and others separately and paying hundreds of dollars, "
+            "you get everything you need including a website builder, blog, online shop, community forum, podcast page, video channel, link in bio, and more — "
+            "all at a very affordable price.\n\n"
+            "Monetization:\n"
+            "Q: How can creators make money on Serey? "
+            "A: Creators can monetize through multiple channels including selling products in their shop, offering premium content subscriptions, "
+            "accepting tips, running paid communities, selling digital products, and earning from banner sponsorships and advertisers — all from one platform.\n"
+            "Q: What fees or commission does Serey charge? "
+            "A: Serey believes creators should keep as much of what they earn as possible. Serey takes a small commission to support platform development — "
+            "less than other platforms. For premium content Serey charges 8.5% including Stripe fees, compared to Substack's 10%. "
+            "For online shop sales Serey charges only 1.2%. No hidden fees. Visit the pricing page for full details.\n"
+            "Q: Can I sell physical and digital products? "
+            "A: Yes. Serey's shop supports both physical and digital products, giving creators and businesses full flexibility to sell whatever they offer, "
+            "as long as it is legal in the jurisdiction they operate in. "
             "Route: /faq"
         ),
     },
@@ -479,14 +463,25 @@ SEREY_KNOWLEDGE = [
     {
         "id": "serey_founder",
         "category": "about",
-        "title": "Serey Founder: Chhay Lem Lim",
+        "title": "Serey Founder & Partners: Chhay Lem Lim",
         "content": (
-            "Chhay Lem Lim is the visionary founder of Serey. Initially focused on creating a platform tailored for Cambodia, "
-            "Chhay soon recognized Serey's potential to make a global impact. This realization shifted his vision toward "
-            "developing Serey into an international platform that empowers communities worldwide. "
-            "Chhay plays a hands-on role in collaborating with developers in Cambodia, ensuring that Serey’s growth is grounded "
-            "in innovation and teamwork. He is committed to building a revolutionary infrastructure for social publishing platforms, "
-            "shaping the future of digital freedom and expression through blockchain technology."
+            "Our People & Partners — Serey is developed by a focused team and supported by partners across technology, education, and digital platforms.\n\n"
+            "Founder — Chhay Lem Lim: "
+            "Chhay Lem Lim founded Serey with the vision of creating a complete, affordable, and creator-focused publishing platform. "
+            "Recognizing the growing need for independence in the digital world, he focused on building a platform that allows creators and "
+            "small businesses to easily build and manage their own online presence — without relying on multiple expensive tools or large technology corporations. "
+            "Today his focus is on expanding Serey into a global platform that combines website building, publishing, community, e-commerce, and more in one accessible place. "
+            "Chhay works closely with the development team and strategic partners, focusing on product innovation, long-term growth, and international expansion.\n\n"
+            "Partners:\n"
+            "Paul Frijters — Professor of Wellbeing Economics and former professor at the London School of Economics, who supports Serey's vision "
+            "of building fairer and more independent ecosystems for creators and communities.\n"
+            "Wallet79 — a Netherlands-based platform connecting employers, job seekers, and educational opportunities. "
+            "Serey and Wallet79 collaborate to support creator and business growth across Europe.\n"
+            "Open Source Science (OS-Sci) — an initiative providing open source computer science education and training.\n\n"
+            "Our Approach: Serey is built as an open and collaborative platform focused on giving creators and small businesses true ownership "
+            "and independence online — a complete platform they truly own, fair and transparent monetization, a simple and affordable professional "
+            "online presence, tools to protect their work and grow their audience, and a platform that grows alongside its creators and partners. "
+            "Route: /founders"
         ),
     },
     {
@@ -650,6 +645,49 @@ SEREY_KNOWLEDGE = [
             "Route: /investors"
         ),
     },
+    {
+        "id": "serey_vision",
+        "category": "about",
+        "title": "Serey Vision — Your Content, Always Yours",
+        "content": (
+            "Our Vision: Your content. Always yours. "
+            "Most platforms profit from your work — you lose ownership of your content, your audience, and your income. "
+            "Serey was built because we believe that's wrong. "
+            "We don't just want to host your platform. We want to grow with you — fairer fees, full control, and a genuine partnership, "
+            "not a transaction (learn more at the Creator Ownership Program: /creator-ownership-program).\n\n"
+            "Blockchain-Verified Ownership: every post you publish gives you the option to store it permanently on the blockchain — "
+            "creating undeniable proof of authorship and ownership that no one can take away. "
+            "Blockchain-verified posts can be browsed on the Serey Explorer page. Route: /sereyexplorer/explorer\n\n"
+            "You Set the Rules: no shadow bans, no reach throttling, no arbitrary takedowns. "
+            "Your community, your guidelines, your decisions.\n\n"
+            "A Real Partnership: we grow when you grow. "
+            "That's why Serey works with selected creators who share the vision and want to build something lasting."
+        ),
+    },
+    {
+        "id": "serey_guidelines",
+        "category": "platform",
+        "title": "Serey Platform Guidelines — Rules and Values",
+        "content": (
+            "Platform Guidelines define how users and platforms operate within the Serey ecosystem.\n\n"
+            "Universal Guidelines (apply to all users and platforms without exception):\n"
+            "01. No Theft — unauthorized use or taking of accounts, funds, or content is prohibited.\n"
+            "02. No Impersonation or Misrepresentation — users may not falsely represent themselves or others.\n"
+            "03. No Fraud or Scams — deceptive practices, including financial scams and phishing, are not allowed.\n"
+            "04. No Unauthorized Access — accessing accounts or systems without permission is strictly prohibited.\n"
+            "05. Respect Platform Rules and Applicable Laws — users must follow both platform-specific guidelines and relevant laws.\n"
+            "06. No Malicious Software — uploading or distributing harmful software or code is not allowed.\n"
+            "07. Platform Transparency — platforms must clearly display their terms, policies, and community guidelines.\n\n"
+            "Platform-Specific Guidelines: each platform on Serey can define its own content policies and restrictions, "
+            "community and interaction rules, monetization models (such as subscriptions or advertising), "
+            "and moderation and dispute handling processes. "
+            "Platform operators are responsible for clearly communicating and enforcing their rules, "
+            "while aligning with Serey's universal guidelines. "
+            "Serey provides an open and flexible infrastructure where platforms can operate independently "
+            "while maintaining a shared standard of trust, safety, and transparency across the ecosystem. "
+            "Route: /rules-and-values"
+        ),
+    },
     # -----------------------------------------------------------------------
     # Add more knowledge entries here as Serey grows.
     # Follow the same structure: id, category, title, content.
@@ -677,14 +715,18 @@ CONTEXTUAL_PREFIXES: dict[str, str] = {
         "the private creator dashboard, and how to apply via contact@serey.io."
     ),
     "serey_overview": (
-        "This chunk describes what Serey is, its founding story in 2018, its mission of digital "
-        "sovereignty and censorship resistance, how blockchain is used, and how anyone can create "
-        "a social publishing platform on Serey without technical skills."
+        "This chunk describes what Serey is: an all-in-one publishing platform for websites, blogs, "
+        "online shops, podcasts, video channels, and communities; its mission that creators should "
+        "own their platform, audience, and earnings; its founding in 2018, affordable transparent "
+        "pricing, content timestamping for proof of authorship, growth across Southeast Asia and "
+        "Europe, and its registered US LLC."
     ),
     "serey_faq": (
-        "This chunk answers frequently asked questions about Serey: what the platform is, what a "
-        "Superhub is, the SRY token, how users earn tokens, available tools (CMS, AI builder), "
-        "subdomain options, and how to get started."
+        "This chunk answers frequently asked questions about Serey: what the platform is (all-in-one "
+        "alternative to WordPress, Substack, Shopify, Canva, Linktree), how creators monetize (shop, "
+        "premium content subscriptions, tips, paid communities, digital products, sponsorships), "
+        "Serey's fees and commission (8.5% on premium content vs Substack's 10%, only 1.2% on shop "
+        "sales, no hidden fees), and selling physical and digital products."
     ),
     "serey_routes_social": (
         "Routes and pages for Serey's social features: watching and uploading videos (video-component), "
@@ -713,8 +755,21 @@ CONTEXTUAL_PREFIXES: dict[str, str] = {
     ),
     "serey_founder": (
         "This chunk answers who founded, created, started, or is behind Serey: the founder of Serey "
-        "is Chhay Lem Lim, who founded the platform, his vision and background, and his hands-on role "
-        "working with developers in Cambodia. Who is the founder, who created Serey, who made Serey, "
-        "who started Serey, who runs Serey."
+        "is Chhay Lem Lim, his vision and focus on global expansion, plus Serey's partners — "
+        "Paul Frijters (Wellbeing Economics professor), Wallet79 (Netherlands), and Open Source "
+        "Science (OS-Sci). Who is the founder, who created Serey, who made Serey, who started Serey, "
+        "who runs Serey, who are Serey's partners and team."
+    ),
+    "serey_vision": (
+        "This chunk describes Serey's vision — your content, always yours: blockchain-verified "
+        "ownership where posts can be stored permanently on the blockchain as proof of authorship "
+        "(Serey Explorer), no shadow bans or arbitrary takedowns, you set the rules, and a real "
+        "partnership where Serey grows with its creators."
+    ),
+    "serey_guidelines": (
+        "This chunk describes Serey's platform guidelines, rules, and values: the seven universal "
+        "guidelines (no theft, no impersonation, no fraud or scams, no unauthorized access, respect "
+        "laws, no malicious software, platform transparency) and how each platform defines its own "
+        "content policies, community rules, monetization, and moderation."
     ),
 }

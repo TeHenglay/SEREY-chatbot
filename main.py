@@ -109,31 +109,51 @@ def health_check():
                 f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
 
     db_ok = True
+    db_reason = None
     try:
         names = get_all_component_names()
         db_ok = bool(names)
-    except Exception:
+        if not db_ok:
+            db_reason = "ChromaDB 'components' collection is empty. Run: python scripts/index_components.py"
+    except Exception as e:
         db_ok = False
+        db_reason = f"ChromaDB error: {e}"
+
     api_status = check_api_status()
     model_ok = api_status["reachable"]
     quota_ok = api_status["quota_ok"]
+    api_reason = api_status.get("reason")
     queue_ok = _scheduler.running
 
     healthy = db_ok and model_ok and quota_ok and queue_ok
 
+    def service(ok, reason=None):
+        # Per-service object so monitors get an actionable reason, not just a boolean.
+        return {"ok": ok, "reason": reason if not ok else None}
+
+    services = {
+        "database": service(db_ok, db_reason),
+        # model_loaded reflects Grok reachability; carries the reason when it (or quota) is down.
+        "model_loaded": service(model_ok, api_reason if not model_ok else None),
+        "quota_ok": service(quota_ok, api_reason if not quota_ok else None),
+        "queue": service(queue_ok, None if queue_ok else "APScheduler is not running"),
+    }
+
     body = {
         "status": "ok" if healthy else "degraded",
         "timestamp": timestamp,
-        "services": {
-            "database": db_ok,
-            "model_loaded": model_ok,
-            "quota_ok": quota_ok,
-            "queue": queue_ok,
-        },
+        "services": services,
         "version": "1.0.0",
     }
 
     if not healthy:
+        # Top-level summary of the first failing service, for monitors that read
+        # detail/message rather than per-service reasons.
+        detail = next(
+            (svc["reason"] for svc in services.values() if not svc["ok"] and svc["reason"]),
+            "One or more services are degraded",
+        )
+        body["detail"] = detail
         return JSONResponse(status_code=503, content=body)
     return body
 

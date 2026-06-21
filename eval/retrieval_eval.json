@@ -31,8 +31,9 @@
     {"query": "what is serey", "expect_any": ["About Serey — Our Story", "Who is Serey guide bot", "Serey Marketplace"], "domain": "about"},
     {"query": "who founded serey", "expect_any": ["Serey Founder"], "domain": "about"},
     {"query": "who are you and what can you help me with", "expect_any": ["Who is Serey guide bot"], "domain": "about"},
-    {"query": "what is the SRY token", "expect_any": ["Serey Frequently Asked Questions"], "domain": "about"},
-    {"query": "what is a superhub", "expect_any": ["Serey Frequently Asked Questions"], "domain": "about"},
+    {"query": "what fees or commission does serey charge", "expect_any": ["Serey Frequently Asked Questions"], "domain": "about"},
+    {"query": "can I store my post on the blockchain to prove ownership", "expect_any": ["Serey Vision", "About Serey — Our Story"], "domain": "about"},
+    {"query": "what are the platform rules and guidelines on serey", "expect_any": ["Platform Guidelines", "Rules and Values"], "domain": "platform"},
 
     {"query": "how do I contact support", "expect_any": ["Serey Support and Contact"], "domain": "support"},
     {"query": "what is your email address", "expect_any": ["Serey Support and Contact"], "domain": "support"},

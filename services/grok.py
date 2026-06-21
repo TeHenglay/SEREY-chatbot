@@ -165,24 +165,38 @@ async def stream_text(prompt: str, system: str | None = None):
 
 def check_api_status() -> dict:
     """
-    Returns {"reachable": bool, "quota_ok": bool}.
-    Distinguishes quota exhaustion (429) from other failures so callers
-    can surface the difference in health/monitoring endpoints.
+    Returns {"reachable": bool, "quota_ok": bool, "reason": str | None}.
+    Distinguishes quota exhaustion (429 rate-limit, or 403 credits/spending-limit)
+    from other failures so callers can surface the difference — and a human-readable
+    reason — in health/monitoring endpoints.
     """
     from openai import RateLimitError
 
     if not os.getenv("GROK_API_KEY"):
-        return {"reachable": False, "quota_ok": True}
+        return {"reachable": False, "quota_ok": True, "reason": "GROK_API_KEY is not set"}
     try:
         result = generate('Return this exact JSON: {"status": "connected"}')
         ok = "connected" in result
-        return {"reachable": ok, "quota_ok": True}
+        reason = None if ok else "Grok responded but health probe returned unexpected output"
+        return {"reachable": ok, "quota_ok": True, "reason": reason}
     except RateLimitError as e:
-        logger.error("Grok quota/rate-limit exceeded: %s", str(e))
-        return {"reachable": True, "quota_ok": False}
+        msg = str(e)
+        logger.error("Grok quota/rate-limit exceeded: %s", msg)
+        return {"reachable": True, "quota_ok": False, "reason": f"Grok rate-limit/quota exceeded: {msg}"}
     except Exception as e:
-        logger.error("Grok check_api_status failed: %s", str(e))
-        return {"reachable": False, "quota_ok": True}
+        msg = str(e)
+        logger.error("Grok check_api_status failed: %s", msg)
+        # xAI returns 403 permission-denied (not 429) when a team has used all
+        # available credits or hit its monthly spending limit. Treat that as a
+        # quota problem so monitors can act on billing rather than connectivity.
+        lowered = msg.lower()
+        if "credit" in lowered or "spending limit" in lowered or "permission-denied" in lowered or "permission_denied" in lowered:
+            return {
+                "reachable": True,
+                "quota_ok": False,
+                "reason": f"Grok billing/quota error (add credits or raise spending limit in the xAI console): {msg}",
+            }
+        return {"reachable": False, "quota_ok": True, "reason": f"Grok API unreachable: {msg}"}
 
 
 def test_connection() -> bool:
