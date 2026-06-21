@@ -30,9 +30,11 @@ logger = logging.getLogger(__name__)
 _SEREY_API_BASE = "https://global-api.serey.io"
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
-# In-memory fallback cache: community_name → (categories, fetched_at)
+# Fallback cache used ONLY when Redis is unavailable. When Redis is up it is the
+# single source of truth (Node invalidates serey:categories:* on any mutation);
+# this in-process dict can't receive those invalidations, so it must not shadow Redis.
 _CAT_CACHE: dict[str, tuple[list[dict], float]] = {}
-_CAT_CACHE_TTL = 2592000  # 30 days — Node.js invalidates serey:categories:* on any category mutation
+_CAT_CACHE_TTL = 2592000  # 30 days; also the Redis TTL via setex below
 
 _redis: aioredis.Redis | None = None
 _redis_available = True  # flipped to False on first connection failure
@@ -68,9 +70,9 @@ class CategorizeRequest(BaseModel):
 
 async def _fetch_categories(community_name: str, token: str) -> list[dict]:
     redis_key = f"serey:categories:{community_name}"
-
-    # 1. Try Redis
     r = await _get_redis()
+
+    # 1. Redis is authoritative — Node invalidates serey:categories:* on mutation.
     if r:
         try:
             cached = await r.get(redis_key)
@@ -80,13 +82,16 @@ async def _fetch_categories(community_name: str, token: str) -> list[dict]:
         except Exception as e:
             logger.warning("Redis read failed: %s", e)
 
-    # 2. Try in-memory fallback
-    mem = _CAT_CACHE.get(community_name)
-    if mem and (time.monotonic() - mem[1]) < _CAT_CACHE_TTL:
-        logger.info("In-memory cache hit for community=%s", community_name)
-        return mem[0]
+    # 2. In-memory ONLY when Redis is unavailable. When Redis is up we must not
+    #    shadow it: Node can't reach this process's memory, so a stale in-memory
+    #    hit would block Redis from ever repopulating after invalidation.
+    if not r:
+        mem = _CAT_CACHE.get(community_name)
+        if mem and (time.monotonic() - mem[1]) < _CAT_CACHE_TTL:
+            logger.info("In-memory cache hit for community=%s", community_name)
+            return mem[0]
 
-    # 3. Fetch from Serey API
+    # 3. Fetch from Serey API, then write to whichever cache is live.
     url = f"{_SEREY_API_BASE}/api/v2/category/list-by-community"
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -102,15 +107,14 @@ async def _fetch_categories(community_name: str, token: str) -> list[dict]:
             ]
             logger.info("Fetched %d categories for community=%s", len(categories), community_name)
 
-            # Store in Redis (TTL 5 min)
-            if r and categories:
-                try:
-                    await r.setex(redis_key, _CAT_CACHE_TTL, json.dumps(categories))
-                except Exception as e:
-                    logger.warning("Redis write failed: %s", e)
-
-            # Always update in-memory too
-            _CAT_CACHE[community_name] = (categories, time.monotonic())
+            if categories:
+                if r:
+                    try:
+                        await r.setex(redis_key, _CAT_CACHE_TTL, json.dumps(categories))
+                    except Exception as e:
+                        logger.warning("Redis write failed: %s", e)
+                else:
+                    _CAT_CACHE[community_name] = (categories, time.monotonic())
             return categories
         except Exception as e:
             logger.warning("Failed to fetch categories from Serey API: %s", e)
