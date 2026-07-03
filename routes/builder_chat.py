@@ -23,12 +23,57 @@ from services.memory import append_session_turn, get_session_history_prompt
 import json
 import logging
 import os
+import re
+import time
 from typing import Any
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _CHAT_API_KEY = os.getenv("CHAT_API_KEY", "")
+
+# ---------------------------------------------------------------------------
+# Per-session previous page state — powers partial undo ("undo the color
+# change", "put the old title back"). The frontend handles full reverts
+# locally from its own history; here we keep the page_context from the
+# previous turn so the AI can see the old values and restore them via patches.
+# In-process store (same lifetime model as the short-term session memory).
+# ---------------------------------------------------------------------------
+
+_UNDO_INTENT_RE = re.compile(
+    r"\b(revert|undo|go back|back to|previous|restore|original|before|as it was|bring back)\b",
+    re.IGNORECASE,
+)
+_KHMER_UNDO_TERMS = ("ដូចមុន", "ត្រឡប់", "ត្រលប់", "មិនយក")
+_PREV_CONTEXT_TTL_SECS = 24 * 3600
+_PREV_CONTEXT_MAX_SESSIONS = 500
+_prev_page_context: dict[str, tuple[float, str]] = {}
+
+
+def _has_undo_intent(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_UNDO_INTENT_RE.search(message)) or any(t in message for t in _KHMER_UNDO_TERMS)
+
+
+def _get_prev_page_context(session_id: str) -> str | None:
+    entry = _prev_page_context.get(session_id)
+    if not entry:
+        return None
+    ts, ctx = entry
+    if time.time() - ts > _PREV_CONTEXT_TTL_SECS:
+        _prev_page_context.pop(session_id, None)
+        return None
+    return ctx
+
+
+def _store_prev_page_context(session_id: str, page_context: str | None) -> None:
+    if not page_context:
+        return
+    if len(_prev_page_context) >= _PREV_CONTEXT_MAX_SESSIONS:
+        oldest = min(_prev_page_context, key=lambda k: _prev_page_context[k][0])
+        _prev_page_context.pop(oldest, None)
+    _prev_page_context[session_id] = (time.time(), page_context)
 
 
 def _verify_api_key(x_serey_api_key: str = Header(default="")) -> None:
@@ -537,6 +582,13 @@ OR when just answering a question (no layout change):
 14. STYLE 99 RESTRAINT: use style 99 for at most ONE section per page, and only when a suitable
     background image is already uploaded or the user asks for it. Full-bleed backgrounds everywhere
     look heavy and slow.
+15. UNDO / REVERT: when the user asks to undo or bring back a specific previous value ("undo the
+    color change", "put the old title back", "make the hero like before"):
+    - If a PREVIOUS PAGE STATE block is provided, read the old value from it and restore EXACTLY
+      that value via update_block patches — change only the fields the user wants back, nothing else.
+    - If no previous state is available, say honestly that you can't see the earlier version and
+      suggest the Undo button (or typing just "undo") which restores the whole previous page instantly.
+    - NEVER guess at what the old value might have been.
 """
 
 
@@ -572,10 +624,21 @@ async def builder_chat(request: ChatRequest):
         for mismatch in compare_with_backend_map(frontend_style_map):
             logger.warning("Frontend style map mismatch: %s", mismatch)
 
+    # On undo-ish requests, show the AI the page state from the previous turn so
+    # it can restore specific old values via update_block patches.
+    prev_state_section = ""
+    if _has_undo_intent(request.message):
+        prev_ctx = _get_prev_page_context(request.session_id)
+        if prev_ctx and prev_ctx != (request.page_context or ""):
+            prev_state_section = (
+                "\n== PREVIOUS PAGE STATE (before your last change — use this to restore "
+                f"the specific values the user wants back, via update_block patches) ==\n{prev_ctx}\n"
+            )
+
     full_prompt = f"""{community_ctx}
 
 {page_ctx}
-
+{prev_state_section}
 {history_section}
 
 ---
@@ -775,7 +838,13 @@ Respond with valid JSON now:
     if final_layout is not None:
         uploads_needed = [UploadNeeded(**u) for u in derive_uploads_needed(final_layout)]
 
-    # 7. Save this turn to session history (non-critical)
+    # 7. Remember this turn's incoming page state for future undo requests.
+    # Only turns that changed the page overwrite the stored snapshot, so a
+    # follow-up question doesn't erase the pre-change state.
+    if blueprint is not None or patches:
+        _store_prev_page_context(request.session_id, request.page_context)
+
+    # 8. Save this turn to session history (non-critical)
     try:
         saved_reply = reply
         if blueprint is not None:
