@@ -91,7 +91,12 @@ async def match_products(request: MatchProductsRequest):
 
     # Normalize: image number -> slot; each product assigned at most once
     # (on duplicates the higher-confidence assignment wins).
-    requested_names = {p.name for p in request.products}
+    # Case/whitespace-insensitive lookup: the model may echo "iphone 13" for
+    # product "iPhone 13". Canonical (user-typed) name wins; first occurrence
+    # wins for duplicate names.
+    canonical_by_norm: dict[str, str] = {}
+    for p in request.products:
+        canonical_by_norm.setdefault(p.name.strip().casefold(), p.name)
     best_by_image: dict[int, dict] = {}
     for entry in data["matches"]:
         if not isinstance(entry, dict):
@@ -106,8 +111,11 @@ async def match_products(request: MatchProductsRequest):
 
     assigned: dict[str, tuple[int, int]] = {}  # name -> (image_no, confidence_rank)
     for image_no, entry in sorted(best_by_image.items()):
-        name = entry.get("product")
-        if not isinstance(name, str) or name not in requested_names:
+        raw_name = entry.get("product")
+        if not isinstance(raw_name, str):
+            continue
+        name = canonical_by_norm.get(raw_name.strip().casefold())
+        if name is None:
             continue
         confidence = str(entry.get("confidence") or "low").lower()
         rank = _CONFIDENCE_RANK.get(confidence, 1)

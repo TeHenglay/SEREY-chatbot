@@ -66,6 +66,28 @@ def _is_color_only_request(message: str) -> bool:
         return False
     return bool(_COLOR_INTENT_RE.search(message)) and not _LAYOUT_INTENT_RE.search(message)
 _KHMER_UNDO_TERMS = ("ដូចមុន", "ត្រឡប់", "ត្រលប់", "មិនយក")
+
+# Explicit restore intent — used to GATE deterministic reverts (unlike the
+# broad _UNDO_INTENT_RE above, which only gates prompt injection). Matches
+# "undo"/"revert"/"restore", "old … back" in either word order, and
+# "like (it was) before" — but NOT "make it darker again" or "back to white".
+_EXPLICIT_RESTORE_RE = re.compile(
+    r"\b(undo|revert|restore)\b"
+    r"|\b(old|previous|earlier|original)\b.{0,40}\bback\b"
+    r"|\bback\b.{0,40}\b(old|previous|earlier|original|before)\b"
+    r"|\blike (it was )?before\b",
+    re.IGNORECASE,
+)
+
+# A restore request that names a specific target is a PARTIAL undo — it must
+# go to the model with PREVIOUS PAGE STATE, never to the whole-page snapshot
+# revert ("undo the color change on the hero only", "restore my old logo").
+_PARTIAL_QUALIFIER_RE = re.compile(
+    r"\b(only|just|except|section|hero|footer|gallery|galleries|team|about|faq|testimonial(s)?"
+    r"|vision|video|blog|ranking|subscription|newsletter|custom|map|countdown"
+    r"|logo|title|subtitle|heading|button|menu|font|image|photo|picture|mockup|screenshot)\b",
+    re.IGNORECASE,
+)
 _PREV_CONTEXT_TTL_SECS = 24 * 3600
 _PREV_CONTEXT_MAX_SESSIONS = 500
 _prev_page_context: dict[str, tuple[float, str]] = {}
@@ -90,13 +112,22 @@ _FULL_UNDO_RE = re.compile(
     r"|go back to (how|the way) it was|restore everything)\b",
     re.IGNORECASE,
 )
-_KHMER_FULL_UNDO_TERMS = ("ដូចមុន", "ត្រឡប់ក្រោយ", "ត្រលប់ក្រោយ", "មិនយកការផ្លាស់ប្តូរ")
+_KHMER_FULL_UNDO_TERMS = ("ត្រឡប់ក្រោយ", "ត្រលប់ក្រោយ", "មិនយកការផ្លាស់ប្តូរ")
 
 
 def _is_full_undo(message: str) -> bool:
     if not message:
         return False
-    return bool(_FULL_UNDO_RE.search(message)) or any(t in message for t in _KHMER_FULL_UNDO_TERMS)
+    # A named target ("… on the hero only", "restore my old logo") means a
+    # PARTIAL undo — hand it to the model with PREVIOUS PAGE STATE instead.
+    if _PARTIAL_QUALIFIER_RE.search(message):
+        return False
+    if _FULL_UNDO_RE.search(message) or any(t in message for t in _KHMER_FULL_UNDO_TERMS):
+        return True
+    # Bare Khmer "like before" (ដូចមុន) counts as a full undo only when the
+    # whole message is short — inside a longer sentence it usually qualifies
+    # one specific change ("change the title color back like before").
+    return "ដូចមុន" in message and len(message.strip()) <= 25
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +142,14 @@ _IMAGE_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 _URL_RE = re.compile(r"https?://[^\s\"'<>\)\]]+", re.IGNORECASE)
+# URLs that belong to IMAGE fields in the page context ('image_url: "…"',
+# 'logo_url: "…"', 'bg_image_url: "…"') — button_url / privacy_url links
+# must never reach the vision model: one non-image URL can fail the whole
+# vision call, and non-images waste the image cap.
+_IMAGE_FIELD_URL_RE = re.compile(
+    r"\b(?:image_url(?:_2)?|logo_url|bg_image_url)\"?\s*[:=]\s*\"?(https?://[^\s\"'<>\)\]]+)",
+    re.IGNORECASE,
+)
 _NON_IMAGE_HOST_RE = re.compile(
     r"(youtube\.com|youtu\.be|facebook\.com|instagram\.com|t\.me|tiktok\.com|twitter\.com|x\.com|vimeo\.com)",
     re.IGNORECASE,
@@ -121,8 +160,12 @@ _MAX_VISION_IMAGES = 6
 def _extract_image_urls(page_context: str | None) -> list[str]:
     if not page_context:
         return []
+    candidates = _IMAGE_FIELD_URL_RE.findall(page_context)
+    if not candidates:
+        # Context format without field labels — fall back to every URL.
+        candidates = _URL_RE.findall(page_context)
     urls: list[str] = []
-    for url in _URL_RE.findall(page_context):
+    for url in candidates:
         url = url.rstrip(".,;")
         if _NON_IMAGE_HOST_RE.search(url) or url in urls:
             continue
@@ -419,7 +462,7 @@ Every section must include:
   type              — integer type ID (string "TEXTBLOCK" for text blocks) (REQUIRED)
   style             — integer from the section's allowed style list (REQUIRED)
   is_hidden         — boolean, default false (REQUIRED)
-  instance_key      — string, e.g. "team_1". REQUIRED for all sections. First instance = "{{name}}_1". Singletons: "hero", "footer".
+  instance_key      — string. REQUIRED for all sections. The FIRST instance of a type uses the BARE base name (e.g. "gallery", "team", "faq" — NEVER "gallery_1"). Singletons: "hero", "footer".
   colors            — object of hex strings; allowed keys per section listed below
   bg_image_url      — always set to "" UNLESS page_context shows an ALREADY UPLOADED bg_image_url — then copy that exact URL
   bg_image_opacity  — float 0.0–1.0, default 0.5
@@ -609,7 +652,7 @@ OR when making targeted updates to an existing layout:
     "add_block"    — adding a NEW section that doesn't exist yet (e.g. user asks to add TEAM, FAQ, VISION)
     "update_block" — modifying fields of an EXISTING section (title, color, style, etc.)
     "delete_block" — removing an existing section
-  instance_key in patches: use to target a specific instance (e.g. "team_2"). Omit if there's only one.
+  instance_key in patches: reuse the EXACT key shown in page_context (e.g. "team__2"). Omit if there's only one instance.
   CRITICAL RULES for patches:
   - ALWAYS use "add_block" (NOT "update_block") for every section that is listed as "NOT on page" in the page context.
   - When user says "add it", "do it", "can you do it for me", "add testimonials", "add vision", etc. — use add_block for EACH requested section. Include real content (title, description, items) in the updates.
@@ -693,9 +736,10 @@ OR when just answering a question (no layout change):
    On a full redesign (blueprint), ALWAYS include uploads_needed for every section that has image
    fields — even if page_context had images before. New layout = new upload prompts.
 10. DUPLICATE SECTIONS: You may include multiple instances of the same type (e.g. two FAQ sections).
-    Assign unique instance_key values: first = "{{name}}_1" (e.g. "faq_1"), second = "{{name}}_2", etc.
-    When page_context lists an existing instance_key (e.g. "team__2"), reuse that EXACT key in patches.
-    Hero and Footer are always singletons — use instance_key "hero" and "footer" respectively.
+    Assign unique instance_key values: first instance = the bare base name (e.g. "faq"); each
+    additional instance uses a DOUBLE underscore suffix: "faq__2", "faq__3". Never use "{{name}}_1".
+    When page_context lists an existing instance_key (e.g. "team__2"), reuse that EXACT key in
+    patches — never rename it. Hero and Footer are always singletons: "hero" and "footer".
 11. GALLERY subtype: set section_subtype="product" when showcasing products/services/features
     (items need real name + description); "gallery" for a plain photo grid; "project" for portfolio
     project cards. IMPORTANT: with section_subtype="product" the ONLY valid styles are 1-5
@@ -774,7 +818,8 @@ async def builder_chat(request: ChatRequest):
     # Same for color-restore requests when the LAST change was colors-only:
     # undoing that whole turn restores every section's colors exactly.
     wants_old_colors = (
-        _has_undo_intent(request.message)
+        bool(_EXPLICIT_RESTORE_RE.search(request.message or ""))
+        and not _PARTIAL_QUALIFIER_RE.search(request.message or "")
         and bool(_COLOR_INTENT_RE.search(request.message or ""))
         and _last_change_was_color_only(request.session_id)
     )
@@ -875,19 +920,26 @@ Respond with valid JSON now:
                 salvaged = None
                 if brace != -1:
                     try:
-                        candidate = json.loads(cleaned[brace:])
+                        # raw_decode tolerates trailing prose after the object,
+                        # so "text {json} more text" still salvages the envelope.
+                        candidate, _end = json.JSONDecoder().raw_decode(cleaned, brace)
                         if isinstance(candidate, dict) and "reply" in candidate:
                             salvaged = candidate
                     except json.JSONDecodeError:
                         pass
                 if salvaged is not None:
-                    logger.warning("Model prefixed JSON with prose — salvaged embedded envelope")
+                    logger.warning("Model wrapped JSON in prose — salvaged embedded envelope")
                     data = salvaged
                     break
                 logger.warning("Model returned plain text instead of JSON — wrapping as reply: %s", cleaned[:200])
                 data = {"reply": cleaned, "blueprint": None, "patches": None}
                 break
-            data = json.loads(cleaned)
+            try:
+                data = json.loads(cleaned)
+            except json.JSONDecodeError:
+                # JSON followed by trailing prose ("{...} Hope that helps!")
+                data, _end = json.JSONDecoder().raw_decode(cleaned)
+                logger.warning("Model appended prose after JSON — ignored trailing text")
             break
         except json.JSONDecodeError as e:
             logger.error("JSON parse error (attempt %d): %s | Raw: %s", attempt, str(e), raw_response[:600])
@@ -1034,6 +1086,23 @@ Respond with valid JSON now:
                 if color_only_request and p.get("action") == "update_block" and "style" in updates:
                     logger.warning("Stripped style=%s from update_block on color-only request", updates["style"])
                     updates.pop("style", None)
+                # Same item-key compat fixes as blueprints (patches previously
+                # passed q/a/quote/platform/title through to the frontend raw)
+                for item in updates.get("faq_items") or []:
+                    if isinstance(item, dict):
+                        if "q" in item and "question" not in item:
+                            item["question"] = item.pop("q")
+                        if "a" in item and "answer" not in item:
+                            item["answer"] = item.pop("a")
+                for item in updates.get("testimonial_items") or []:
+                    if isinstance(item, dict) and "quote" in item and "content" not in item:
+                        item["content"] = item.pop("quote")
+                for link in updates.get("social_links") or []:
+                    if isinstance(link, dict) and "platform" in link and "type" not in link:
+                        link["type"] = link.pop("platform")
+                for img in updates.get("images") or []:
+                    if isinstance(img, dict) and "title" in img and "name" not in img:
+                        img["name"] = img.pop("title")
                 if patch_type:
                     # Canonical backend map always wins for style IDs.
                     if "style" in updates:
@@ -1063,13 +1132,12 @@ Respond with valid JSON now:
     # Explicit restore intent: "undo"/"revert", or "old/previous/earlier … back"
     # phrasings ("i want the old color theme back"), or a full-undo phrase.
     _msg = request.message or ""
+    # Whole-page revert only for unqualified restore requests; a named target
+    # ("restore my old logo") without patches should surface the model's reply
+    # (usually a clarifying question), not silently roll the page back.
     explicit_undo = (
-        bool(re.search(r"\b(undo|revert)\b", _msg, re.IGNORECASE))
-        # "old … back" in either word order: "i want the old theme back",
-        # "change back the old theme color", "back to the previous colors"
-        or bool(re.search(r"\b(old|previous|earlier|original)\b.{0,40}\bback\b|\bback\b.{0,40}\b(old|previous|earlier|original|before)\b|\blike (it was )?before\b", _msg, re.IGNORECASE))
-        or _is_full_undo(_msg)
-    )
+        bool(_EXPLICIT_RESTORE_RE.search(_msg)) and not _PARTIAL_QUALIFIER_RE.search(_msg)
+    ) or _is_full_undo(_msg)
     if request.page_context and explicit_undo and blueprint is None and not patches:
         logger.warning("Undo intent produced no patches — falling back to revert=True")
         revert_fallback = True
@@ -1082,6 +1150,17 @@ Respond with valid JSON now:
     uploads_needed = None
     if final_layout is not None:
         uploads_needed = [UploadNeeded(**u) for u in derive_uploads_needed(final_layout)]
+    elif raw_uploads and isinstance(raw_uploads, list):
+        # Patch-only turn with prose page_context: there is no layout to derive
+        # uploads from, so pass through the model's own upload requests. Validate
+        # per entry — one malformed entry must not fail the whole request.
+        echoed = []
+        for u in raw_uploads:
+            try:
+                echoed.append(UploadNeeded(**u))
+            except Exception:
+                logger.warning("Dropping malformed uploads_needed entry from model: %s", u)
+        uploads_needed = echoed or None
 
     # 7. Remember this turn's incoming page state for future undo requests.
     # Only turns that changed the page overwrite the stored snapshot, so a
