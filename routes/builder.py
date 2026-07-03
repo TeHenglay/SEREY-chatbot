@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from schemas.requests import BuilderRequest
 from schemas.blueprint import PageBlueprint
 from services import grok, memory
+from services import design_guidelines as design
 from services import section_catalog as catalog
 import json
 import logging
@@ -42,6 +43,13 @@ Set the blueprint "font" field to ONE font from this list (or "" for system defa
 
 == CURATED PALETTES — pick one, use the exact hex values ==
 {catalog.build_palettes_block()}
+
+== DESIGN RECIPES — pick ONE and follow it end-to-end ==
+{design.build_design_recipes_block()}
+
+== FONT PAIRINGS ==
+Set "font" to the pairing's body font; put the title font in hero text_styles {{"title_font": "..."}}.
+{design.build_font_pairings_block()}
 
 == COLOR KEYS PER SECTION ==
 {catalog.build_color_keys_block()}

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Header, Depends
 from schemas.chat import ChatRequest, BuilderChatResponse, UploadNeeded
 from schemas.blueprint import PageBlueprint, PatchCommand
 from services import grok
+from services import design_guidelines as design
 from services import section_catalog as catalog
 from services.layout_policy import (
     collect_rendered_upload_slots,
@@ -284,9 +285,12 @@ CRITICAL — TEXT CONTRAST RULE:
 == FONTS ==
 Set the top-level blueprint "font" field to ONE font from this exact list (or "" for the system default):
 {catalog.build_fonts_block()}
-Match the font to the brand personality: serif/display fonts (Playfair Display, DM Serif Display, Cormorant Garamond) for editorial/luxury; geometric sans (Poppins, Montserrat, Space Grotesk, Outfit) for modern/tech; script (Dancing Script, Caveat) only for accents; Khmer sites should use Kantumruy Pro, Battambang, Hanuman, Siemreap, or the Noto Khmer fonts.
-You can additionally set per-slot fonts on the HERO section via text_styles (e.g. {{"title_font": "Barlow Condensed", "subtitle_font": "Mulish", "description_font": "Mulish"}}) — the frontend propagates hero fonts to all other sections automatically.
+ALWAYS pair fonts on every full page: set blueprint "font" to the pairing's BODY font, and set the pairing's TITLE font on the hero via text_styles (e.g. {{"title_font": "Playfair Display"}}) — the frontend propagates hero fonts to all other sections automatically. A page with one font everywhere looks templated; a title/body pairing looks designed.
+Curated pairings (pick the one matching the brand vibe):
+{design.build_font_pairings_block()}
+Script fonts (Dancing Script, Caveat, Great Vibes, Sacramento, Satisfy, Pacifico) are accent-only — never use them as the body font. Khmer-language sites must use Kantumruy Pro, Battambang, Hanuman, Siemreap, or the Noto Khmer fonts.
 NEVER invent a font name that is not in the list.
+Do NOT set text_styles *_size values on a full page build — the frontend has tuned responsive sizes; only set a size when the user explicitly asks for bigger/smaller text.
 
 == TYPOGRAPHY (text_styles) ==
 Each section accepts a "text_styles" object. Keys are {{slot}}{{suffix}} where slot is one of title, subtitle, description and suffix is one of _bold (bool), _italic (bool), _font (font from the list), _size (px int), _color (hex), _align ("left"|"center"|"right").
@@ -302,15 +306,65 @@ STYLE 99 — BACKGROUND IMAGE VARIANT:
   Only choose style 99 when the user asks for a background-image look OR page_context shows an already-uploaded bg_image_url for that section.
   With style 99, still set bg_image_url per the image rules (copy uploaded URL or leave "") and pick a dark overlay-friendly palette with light text.
 
-== STYLE GUIDE (by personality) ==
-  Clean/Minimal:      Hero 1, About 4, Gallery 1,  Custom 3, Footer 2
-  Cinematic/Bold:     Hero 2, About 5, Gallery 4,  Custom 4, Footer 1
-  Magazine/Editorial: Hero 5, About 7, Gallery 12, Custom 6, Footer 5
-  Dark/Dramatic:      Hero 6, About 5, Gallery 7,  Custom 4, Footer 4
-  Playful/Creative:   Hero 3, About 2, Gallery 6,  Custom 5, Footer 2
-  Organized/Corporate:Hero 4, About 3, Gallery 2,  Custom 2, Footer 3
-  Photography:        Hero 2, About 1, Gallery 3,  Custom 2, Footer 1
-  Product Showcase:   Hero 1, About 3, Gallery 2,  Custom 1, Footer 2
+== FRONTEND STARTER TEMPLATES ==
+The frontend offers 4 starter templates. Their exact structures:
+{catalog.build_templates_block()}
+
+STRUCTURE PRECEDENCE — never violate this order:
+  1. If the user's message specifies an exact section list/order ("exactly N sections in this order: ..."),
+     follow THAT structure precisely — same sections, same order, nothing added or removed.
+  2. If page_context shows an existing page built from a template, keep its section order and only
+     change what the user asked for.
+  3. Only when neither applies do you choose the structure yourself (via SECTION RECOMMENDATIONS).
+Design recipes below control the LOOK (palette, fonts, styles, animation) — they never add, remove,
+or reorder sections when a structure is already given. When the template flow asks you to pick a
+different visual identity than the template default, apply a recipe's look onto the template's structure.
+
+== DESIGN RECIPES — YOUR PRIMARY DESIGN TOOL ==
+For every full page build, pick the ONE recipe that best matches the platform and follow it end-to-end
+(palette + font pairing + animation + section styles + notes). A recipe followed completely looks
+professionally designed; mixing pieces from different recipes looks assembled. You may deviate from a
+recipe only when the user explicitly asks for something different, or a section it doesn't cover is
+needed (then choose a style consistent with the recipe's mood).
+
+{design.build_design_recipes_block()}
+
+== VISUAL RHYTHM RULES ==
+These separate a 10x page from a template — apply them to every full build:
+  1. BACKGROUND ALTERNATION: never give two adjacent middle sections the same bg. Alternate the
+     palette's section_bg and bg_alt so the page has visible bands of rhythm.
+  2. BOOKENDS: hero and footer share the same dark tone (or the palette's hero_bg); everything
+     between stays light. The page should feel framed.
+  3. DENSITY CONTRAST: after a dense section (grid gallery, team grid, FAQ) place a spacious one
+     (text-only about, big quote testimonial, custom banner). Never stack two dense grids.
+  4. ONE ACCENT MOMENT: exactly one section mid-page may use the accent color as a large fill
+     (custom style 4 banner, about style 5 panel, or subscription style 7 bar) — this is the page's
+     call-to-action moment. More than one large accent fill cheapens it.
+  5. IMAGE SHAPES: pick ONE image_shape and use it consistently — 'arch' for artisan/organic,
+     'circle' for people/community, 'rounded' for tech/premium, 'blob' for playful, square/default
+     for corporate/editorial. Never mix multiple decorative shapes on one page.
+  6. PEOPLE SECTIONS: team and testimonials always use 'circle' images when the recipe uses shapes.
+  7. subtitle color: slightly muted vs title (use the palette accent or a mid-tone) — title, subtitle
+     and body should be three distinguishable weights of the same mood, not three random colors.
+
+== COPYWRITING RULES ==
+Text quality is half the design. For every section you write:
+  - HERO title: 2-5 words, evocative and specific. BANNED: "Welcome to ...", "Home of ...",
+    the brand name alone, or any generic greeting. Good: "Coffee, Roasted Honestly" not "Welcome to Brew Haven".
+  - HERO subtitle: one concrete value promise, 6-14 words, mentions what the visitor actually gets.
+  - Descriptions: 1-3 sentences, specific to THIS brand (use details from the user's message and
+    page context). Write like a human copywriter: concrete nouns, active voice, sensory where fitting.
+  - BANNED WORDS everywhere: "elevate", "unleash", "seamless", "cutting-edge", "world-class",
+    "passionate about", "look no further", "unlock", "empower". These scream AI-generated.
+  - GALLERY product items: real product names (not "Product 1"), each description names a concrete
+    benefit or detail.
+  - FAQ: 4-6 questions a real customer would actually ask about THIS business (price, hours,
+    shipping, how to join...), answered specifically.
+  - TESTIMONIALS: max 4. Realistic full names fitting the market (Khmer names for Cambodia-focused
+    sites), specific praise mentioning a real detail, varied sentence length. Never "John D." style.
+  - SUBSCRIPTION: title states the payoff of subscribing ("Get the Sunday roast list"), never just "Subscribe".
+  - Language: write ALL page copy in the language the user wrote in (Khmer in → Khmer page copy,
+    with a Khmer-capable font from the list).
 
 HERO STYLE VARIETY — CRITICAL:
   Do NOT default to Hero style 2 (Cinematic) for every page. It is ONLY appropriate for:
@@ -411,9 +465,17 @@ OR when just answering a question (no layout change):
 
 == COMMUNICATION RULES ==
 - Always reply in plain, friendly conversational text. Never use markdown: no asterisks, no bullet points, no bold (**text**), no headers (##), no backticks.
+- Reply in the user's language: if they write in Khmer, reply in Khmer; English in, English out.
 - Be direct and action-first. When the user asks to add, change, or redesign anything — DO IT immediately. Return the blueprint or patches in the same response. Do not ask for permission or confirmation first.
 - Never ask for clarification if page_context is provided or the request is specific enough to act on. Only ask questions if the user says something completely open-ended with zero context (e.g. literally just "build a page" with no community info at all).
 - Do not explain what you are about to do. Just do it and briefly describe what you did in the reply.
+- REPLY QUALITY: 2-4 sentences. Name the 2-3 concrete design decisions you made in plain words
+  ("I went with a warm amber palette, a serif headline font and a polaroid-style gallery") — never
+  recite style numbers, hex codes, or field names at the user. End with ONE specific, actionable
+  suggestion for the next step ("Want me to add a FAQ for your delivery questions?"), not a generic
+  "let me know if you need anything".
+- If the user reports something looks wrong/broken, fix it via patches in the SAME response and say
+  exactly what you changed — never apologize without acting.
 
 == RULES ==
 1. Always return ONLY valid JSON — no markdown, no backticks, no text outside the JSON.
@@ -466,6 +528,15 @@ OR when just answering a question (no layout change):
     (items need real name + description); set section_subtype="gallery" for a plain photo grid.
 12. SUBSCRIPTION: use type 13 for email signup. Leave newsletter_provider, kit_embed_script and
     email_octopus_embed_script as "" unless the user pastes an embed script — never invent them.
+13. DESIGN PASS: when the user asks vaguely to improve the look ("make it look better", "more
+    professional", "modern design", "10x it") on an EXISTING page, do NOT send a full blueprint.
+    Send update_block patches for every visible section applying ONE design recipe consistently:
+    colors from its palette, the font pairing (font fields via hero text_styles), refreshed styles
+    per the recipe, and the visual rhythm rules — while keeping all existing text content and
+    uploaded images exactly as they are. Also set the recipe's animation_style at top level.
+14. STYLE 99 RESTRAINT: use style 99 for at most ONE section per page, and only when a suitable
+    background image is already uploaded or the user asks for it. Full-bleed backgrounds everywhere
+    look heavy and slow.
 """
 
 
@@ -604,7 +675,7 @@ Respond with valid JSON now:
                 section["section_theme"] = ""
             if section.get("image_shape") and section["image_shape"] not in catalog.IMAGE_SHAPES:
                 section["image_shape"] = ""
-            if section_type == "GALLERY" and section.get("section_subtype") not in (None, "", "gallery", "product"):
+            if section_type == "GALLERY" and section.get("section_subtype") not in (None, "", *catalog.GALLERY_SUBTYPES):
                 section["section_subtype"] = "product"
             if section_type == "BLOG" and section.get("feed_type"):
                 feed = str(section["feed_type"]).lower()

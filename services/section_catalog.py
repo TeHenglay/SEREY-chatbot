@@ -348,7 +348,7 @@ TEXT_STYLE_SUFFIXES: tuple[str, ...] = ("_bold", "_italic", "_font", "_size", "_
 SECTION_FIELD_DOCS: dict[str, str] = {
     "HERO": 'title, subtitle, description, image_url, image_ratio ("16:9"), image_width (null), image_height (null), image_shape ("" | square | rounded | circle | arch | diamond | hexagon | blob | star)',
     "ABOUT": 'title, subtitle, description, image_url, image_ratio ("16:9"), image_width (null), image_height (null), image_shape',
-    "GALLERY": 'title, description, images[{image_url, name, description}], section_subtype ("product" = product/services/features cards with name+description; "gallery" = plain photo grid). Every image item MUST have image_url (""), name, and description.',
+    "GALLERY": 'title, description, images[{image_url, name, description}], section_subtype ("product" = product/services/features cards with name+description; "gallery" = plain photo grid; "project" = portfolio project cards). Every image item MUST have image_url (""), name, and description.',
     "FOOTER": 'title, description, phone, email, location, logo_url, contact_heading, social_heading, privacy_url, terms_url, social_links[{"type":"facebook"|"instagram"|"telegram","handle":"..."}]',
     "VIDEO": "title, description, videos[{url, title, thumbnail}]",
     "VISION": "title, description, goals_title, goals_description, vision_title, vision_description, mission_title, mission_description, image_url",
@@ -361,6 +361,72 @@ SECTION_FIELD_DOCS: dict[str, str] = {
     "SUBSCRIPTION": 'title, description, button_label ("Subscribe"), placeholder_text, newsletter_provider ("" | "kit" | "email_octopus"), kit_embed_script, email_octopus_embed_script — leave provider/embed fields "" unless the user provides them',
     "TEXTBLOCK": "title, description, content (free-form rich text) — emit type as the string \"TEXTBLOCK\" (it has no numeric ID)",
 }
+
+# Gallery subtypes the frontend renders (GALLERY_SUBTYPE_LABELS / ProductSection).
+GALLERY_SUBTYPES: tuple[str, ...] = ("gallery", "product", "project")
+
+# ---------------------------------------------------------------------------
+# Frontend starter templates — mirrors LandingBuilderV2/landingTemplates.js
+# (LANDING_TEMPLATES). When a user builds from a template, the AI must keep
+# this exact section order/structure and only rewrite content within it.
+# Each section tuple: (TYPE, style, section_subtype or None, is_hidden)
+# ---------------------------------------------------------------------------
+
+FRONTEND_TEMPLATES: dict[str, dict[str, Any]] = {
+    "ecommerce": {
+        "label": "Online Shop",
+        "animation": "slide-up",
+        "font": "Mulish",
+        "sections": (
+            ("HERO", 2, None, False), ("ABOUT", 2, None, False),
+            ("GALLERY", 1, "product", False), ("TESTIMONIALS", 7, None, False),
+            ("FAQ", 1, None, False), ("FOOTER", 4, None, False),
+        ),
+    },
+    "creator": {
+        "label": "Content Creator",
+        "animation": "blur",
+        "font": "Inter",
+        "sections": (
+            ("HERO", 1, None, False), ("ABOUT", 2, None, False),
+            ("GALLERY", 6, "gallery", False), ("TESTIMONIALS", 7, None, False),
+            ("CUSTOM", 3, None, False), ("FOOTER", 2, None, False),
+        ),
+    },
+    "portfolio": {
+        "label": "Portfolio",
+        "animation": "none",
+        "font": "Plus Jakarta Sans",
+        "sections": (
+            ("HERO", 3, None, False), ("ABOUT", 1, None, False),
+            ("GALLERY", 11, "project", False), ("CUSTOM", 2, None, False),
+            ("TESTIMONIALS", 7, None, False), ("FOOTER", 1, None, False),
+        ),
+    },
+    "publisher": {
+        "label": "Publisher",
+        "animation": "slide-left",
+        "font": "Lora",
+        "sections": (
+            ("HERO", 5, None, False), ("ABOUT", 7, None, False),
+            ("BLOG", 6, None, False), ("VIDEO", 1, None, True),
+            ("GALLERY", 3, "gallery", False), ("TEAM", 4, None, False),
+            ("RANKING", 1, None, False), ("FOOTER", 5, None, False),
+        ),
+    },
+}
+
+
+def build_templates_block() -> str:
+    lines: list[str] = []
+    for name, t in FRONTEND_TEMPLATES.items():
+        parts = ", ".join(
+            f"{sec} s{style}" + (f" ({subtype})" if subtype else "") + (" [hidden]" if hidden else "")
+            for sec, style, subtype, hidden in t["sections"]
+        )
+        lines.append(f"  {name} ({t['label']}): font \"{t['font']}\", animation {t['animation']} — {parts}")
+    return "\n".join(lines)
+
 
 # Sections the AI may generate. NEWSLETTER is excluded — the current frontend
 # cannot parse numeric type 14; use SUBSCRIPTION (13) for email signup.
