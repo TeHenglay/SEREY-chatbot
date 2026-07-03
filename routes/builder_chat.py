@@ -737,6 +737,28 @@ OR when just answering a question (no layout change):
     - NEVER include "style" in the updates, never change fonts, animation, layout, images, or any
       text content. The user asked for colors — changing the layout too feels like losing their page.
     - The same applies in reverse: a layout/style request must not silently change colors.
+18. ADVISOR MODE — act like a design consultant, not a passive tool. When the user asks for your
+    opinion, a review, or help improving the site ("what do you think", "how does it look", "any
+    suggestions", "how can I improve this", "is this good"):
+    - Actually AUDIT the PAGE STATE before answering. Check concretely: Is there a clear
+      call-to-action? Are there empty image slots (image_url: "")? Is the copy still generic or
+      placeholder-like? Are there sections a site like this usually needs but that are "NOT on page"
+      (e.g. FAQ, testimonials for a service business; gallery for a shop)? Do the section styles and
+      colors form one coherent look, or does one section clash? Is the page too long or repetitive?
+    - Give an honest verdict in one sentence, then the 2-3 MOST impactful specific improvements you
+      found — each tied to something real on the page ("your Gallery items still say Product 1 with
+      no descriptions", "there's no way for visitors to contact you"), never generic advice that
+      would fit any page.
+    - Do NOT change anything in that reply (blueprint null, patches null) — it's a consultation.
+      End by offering to apply the improvements ("Want me to fix all three?"). If they say yes /
+      "do it", apply ALL suggested improvements via patches in that response.
+    - If the page genuinely looks good, say so and name what works — don't invent problems. Then
+      suggest at most one optional next step.
+    - PROACTIVE TIPS: after completing any normal edit, if you noticed exactly ONE clearly missing
+      thing while reading the page state (empty images, no CTA, an obviously needed section), you
+      may mention it in one short sentence at the end of your reply as an offer. Never more than
+      one tip per reply, never repeat a tip the user already declined in this conversation, and
+      never let the tip delay or replace the requested change.
 """
 
 
@@ -845,8 +867,23 @@ Respond with valid JSON now:
             cleaned = _clean_raw(raw_response)
             if not cleaned:
                 raise ValueError("Model returned empty content after fence stripping")
-            # If model returned plain text instead of JSON, wrap it as a reply-only envelope
+            # If model returned plain text instead of JSON, try to salvage an
+            # embedded JSON envelope (models sometimes echo the reply as prose
+            # BEFORE the JSON); otherwise wrap the text as a reply-only envelope.
             if not cleaned.startswith("{"):
+                brace = cleaned.find("{")
+                salvaged = None
+                if brace != -1:
+                    try:
+                        candidate = json.loads(cleaned[brace:])
+                        if isinstance(candidate, dict) and "reply" in candidate:
+                            salvaged = candidate
+                    except json.JSONDecodeError:
+                        pass
+                if salvaged is not None:
+                    logger.warning("Model prefixed JSON with prose — salvaged embedded envelope")
+                    data = salvaged
+                    break
                 logger.warning("Model returned plain text instead of JSON — wrapping as reply: %s", cleaned[:200])
                 data = {"reply": cleaned, "blueprint": None, "patches": None}
                 break
