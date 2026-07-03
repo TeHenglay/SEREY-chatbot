@@ -99,6 +99,65 @@ def _is_full_undo(message: str) -> bool:
     return bool(_FULL_UNDO_RE.search(message)) or any(t in message for t in _KHMER_FULL_UNDO_TERMS)
 
 
+# ---------------------------------------------------------------------------
+# Vision pre-analysis — the chat model only ever sees image URLs, not pixels.
+# When the user asks about images ("what's in the photo", "name the products
+# based on the images"), we run the uploaded image URLs through the vision
+# model first and inject what they actually show into the prompt.
+# ---------------------------------------------------------------------------
+
+_IMAGE_WORD_RE = re.compile(
+    r"\b(image|images|img|photo|photos|picture|pictures|pic|pics|logo|thumbnail|gallery|រូបភាព|រូប)\b",
+    re.IGNORECASE,
+)
+_URL_RE = re.compile(r"https?://[^\s\"'<>\)\]]+", re.IGNORECASE)
+_NON_IMAGE_HOST_RE = re.compile(
+    r"(youtube\.com|youtu\.be|facebook\.com|instagram\.com|t\.me|tiktok\.com|twitter\.com|x\.com|vimeo\.com)",
+    re.IGNORECASE,
+)
+_MAX_VISION_IMAGES = 6
+
+
+def _extract_image_urls(page_context: str | None) -> list[str]:
+    if not page_context:
+        return []
+    urls: list[str] = []
+    for url in _URL_RE.findall(page_context):
+        url = url.rstrip(".,;")
+        if _NON_IMAGE_HOST_RE.search(url) or url in urls:
+            continue
+        urls.append(url)
+        if len(urls) >= _MAX_VISION_IMAGES:
+            break
+    return urls
+
+
+async def _vision_context(message: str, page_context: str | None) -> str:
+    """Returns a prompt block describing what the page's images actually show,
+    or '' when the message isn't about images / there are no image URLs."""
+    if not message or not _IMAGE_WORD_RE.search(message):
+        return ""
+    urls = _extract_image_urls(page_context)
+    if not urls:
+        return ""
+    numbered = "\n".join(f"Image {i}: {u}" for i, u in enumerate(urls, start=1))
+    vision_prompt = (
+        "For each image, reply with exactly one line in the form "
+        "'Image N: <what it shows — the main subject/product, with brand or type if clearly visible>'. "
+        "Be factual and specific; do not guess brands you cannot read.\n" + numbered
+    )
+    try:
+        raw = await asyncio.to_thread(grok.generate_vision, vision_prompt, urls, None)
+    except Exception as e:
+        logger.warning("Vision pre-analysis failed (%s) — continuing without it", str(e))
+        return ""
+    return (
+        "\n== WHAT THE PAGE'S IMAGES ACTUALLY SHOW (vision analysis — trust this, "
+        "match each Image N to its URL in the page state) ==\n"
+        f"{numbered}\n{raw.strip()}\n"
+    )
+
+
 def _get_prev_page_context(session_id: str) -> str | None:
     entry = _prev_page_context.get(session_id)
     if not entry:
@@ -664,7 +723,14 @@ OR when just answering a question (no layout change):
     - Only if NO previous state block exists, say honestly that you can't see the earlier version and
       suggest the Undo button (or typing just "undo") which restores the whole previous page instantly.
     - NEVER guess at what the old value might have been.
-16. COLOR-ONLY REQUESTS — CRITICAL: when the user asks only about colors, theme, or palette
+16. WHAT YOU CAN SEE IN IMAGES — HONESTY RULE: you normally see only image URLs, never the
+    actual picture content. NEVER claim you can see what is in a photo, and NEVER invent or guess
+    what a product photo shows. The ONLY exception: when a "WHAT THE PAGE'S IMAGES ACTUALLY SHOW"
+    block is present, it contains a real vision analysis — trust it completely and use it (e.g. to
+    rename products to match their photos, matching each Image N to the item whose image_url it is).
+    If the user asks about image content and no such block is present, say you couldn't analyze the
+    images this time and ask them to describe the product instead.
+17. COLOR-ONLY REQUESTS — CRITICAL: when the user asks only about colors, theme, or palette
     ("change the theme color", "make it blue", "darker background", "use warmer colors"):
     - Send update_block patches whose updates contain ONLY the "colors" object (and title/subtitle
       text colors inside it as needed).
@@ -745,10 +811,13 @@ async def builder_chat(request: ChatRequest):
                 f"the specific values the user wants back, via update_block patches) ==\n{prev_ctx}\n"
             )
 
+    # When the user asks about images, look at them with the vision model first
+    vision_section = await _vision_context(request.message, request.page_context)
+
     full_prompt = f"""{community_ctx}
 
 {page_ctx}
-{prev_state_section}
+{prev_state_section}{vision_section}
 {history_section}
 
 ---
