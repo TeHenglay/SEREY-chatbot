@@ -365,6 +365,11 @@ SECTION_FIELD_DOCS: dict[str, str] = {
 # Gallery subtypes the frontend renders (GALLERY_SUBTYPE_LABELS / ProductSection).
 GALLERY_SUBTYPES: tuple[str, ...] = ("gallery", "product", "project")
 
+# GALLERY subtype 'product' renders via ProductSection, which only implements
+# styles 1-5 (any other number falls back to style 1). The photo subtypes
+# ('gallery'/'project') use the full GALLERY style list above.
+PRODUCT_SUBTYPE_STYLES: tuple[int, ...] = (1, 2, 3, 4, 5)
+
 # ---------------------------------------------------------------------------
 # Frontend starter templates — mirrors LandingBuilderV2/landingTemplates.js
 # (LANDING_TEMPLATES). When a user builds from a template, the AI must keep

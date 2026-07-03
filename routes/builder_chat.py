@@ -40,10 +40,31 @@ _CHAT_API_KEY = os.getenv("CHAT_API_KEY", "")
 # In-process store (same lifetime model as the short-term session memory).
 # ---------------------------------------------------------------------------
 
+# Broad on purpose: this only gates injecting PREVIOUS PAGE STATE into the
+# prompt (a few extra tokens when slightly off), so it must catch every way
+# people say "give me the old one" — including "i want the old color theme back".
 _UNDO_INTENT_RE = re.compile(
-    r"\b(revert|undo|go back|back to|previous|restore|original|before|as it was|bring back)\b",
+    r"\b(revert|undo|go back|back to|previous|restore|original|before|as it was|bring back|old|earlier|back|again)\b",
     re.IGNORECASE,
 )
+
+# Color-only request detection: when the user asks purely about colors/theme,
+# any "style" the model sneaks into update_block patches is stripped so a
+# color change can never silently rearrange the layout.
+_COLOR_INTENT_RE = re.compile(
+    r"\b(colou?r|theme|palette|background|bg|darker|lighter|dark mode|light mode|warmer|cooler)\b",
+    re.IGNORECASE,
+)
+_LAYOUT_INTENT_RE = re.compile(
+    r"\b(layout|style|design|look|redesign|rearrange|reorder|split|magazine|cinematic|centered|template|section)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_color_only_request(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_COLOR_INTENT_RE.search(message)) and not _LAYOUT_INTENT_RE.search(message)
 _KHMER_UNDO_TERMS = ("ដូចមុន", "ត្រឡប់", "ត្រលប់", "មិនយក")
 _PREV_CONTEXT_TTL_SECS = 24 * 3600
 _PREV_CONTEXT_MAX_SESSIONS = 500
@@ -54,6 +75,28 @@ def _has_undo_intent(message: str) -> bool:
     if not message:
         return False
     return bool(_UNDO_INTENT_RE.search(message)) or any(t in message for t in _KHMER_UNDO_TERMS)
+
+
+# Full-undo detection: the user wants the WHOLE last change rolled back
+# ("undo that", "put it back how it was") rather than one specific value
+# ("undo the color change" → partial, handled by the model with PREVIOUS
+# PAGE STATE). Full undos are answered deterministically with revert=True —
+# no model call — and the frontend restores its own local snapshot, which is
+# the most complete record of the previous page.
+_FULL_UNDO_RE = re.compile(
+    r"\b(undo (that|it|this|everything)|revert (that|it|this|everything)"
+    r"|put (it|that|them|everything) back"
+    r"|(back|make it) (like|how|the way) it was|as it was before|as it was\b"
+    r"|go back to (how|the way) it was|restore everything)\b",
+    re.IGNORECASE,
+)
+_KHMER_FULL_UNDO_TERMS = ("ដូចមុន", "ត្រឡប់ក្រោយ", "ត្រលប់ក្រោយ", "មិនយកការផ្លាស់ប្តូរ")
+
+
+def _is_full_undo(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_FULL_UNDO_RE.search(message)) or any(t in message for t in _KHMER_FULL_UNDO_TERMS)
 
 
 def _get_prev_page_context(session_id: str) -> str | None:
@@ -74,6 +117,31 @@ def _store_prev_page_context(session_id: str, page_context: str | None) -> None:
         oldest = min(_prev_page_context, key=lambda k: _prev_page_context[k][0])
         _prev_page_context.pop(oldest, None)
     _prev_page_context[session_id] = (time.time(), page_context)
+
+
+# Tracks whether the last page-changing turn was a colors-only edit. When it
+# was, a "give me the old colors back" request equals undoing that whole turn —
+# answered deterministically with revert=True (frontend snapshot restore covers
+# every section) instead of trusting the model to repaint each section.
+_last_change_color_only: dict[str, tuple[float, bool]] = {}
+
+
+def _set_last_change_color_only(session_id: str, color_only: bool) -> None:
+    if len(_last_change_color_only) >= _PREV_CONTEXT_MAX_SESSIONS:
+        oldest = min(_last_change_color_only, key=lambda k: _last_change_color_only[k][0])
+        _last_change_color_only.pop(oldest, None)
+    _last_change_color_only[session_id] = (time.time(), color_only)
+
+
+def _last_change_was_color_only(session_id: str) -> bool:
+    entry = _last_change_color_only.get(session_id)
+    if not entry:
+        return False
+    ts, color_only = entry
+    if time.time() - ts > _PREV_CONTEXT_TTL_SECS:
+        _last_change_color_only.pop(session_id, None)
+        return False
+    return color_only
 
 
 def _verify_api_key(x_serey_api_key: str = Header(default="")) -> None:
@@ -570,7 +638,9 @@ OR when just answering a question (no layout change):
     When page_context lists an existing instance_key (e.g. "team__2"), reuse that EXACT key in patches.
     Hero and Footer are always singletons — use instance_key "hero" and "footer" respectively.
 11. GALLERY subtype: set section_subtype="product" when showcasing products/services/features
-    (items need real name + description); set section_subtype="gallery" for a plain photo grid.
+    (items need real name + description); "gallery" for a plain photo grid; "project" for portfolio
+    project cards. IMPORTANT: with section_subtype="product" the ONLY valid styles are 1-5
+    (product-card layouts) — the photo styles (6-12, 99) do not exist for product cards.
 12. SUBSCRIPTION: use type 13 for email signup. Leave newsletter_provider, kit_embed_script and
     email_octopus_embed_script as "" unless the user pastes an embed script — never invent them.
 13. DESIGN PASS: when the user asks vaguely to improve the look ("make it look better", "more
@@ -582,13 +652,25 @@ OR when just answering a question (no layout change):
 14. STYLE 99 RESTRAINT: use style 99 for at most ONE section per page, and only when a suitable
     background image is already uploaded or the user asks for it. Full-bleed backgrounds everywhere
     look heavy and slow.
-15. UNDO / REVERT: when the user asks to undo or bring back a specific previous value ("undo the
-    color change", "put the old title back", "make the hero like before"):
-    - If a PREVIOUS PAGE STATE block is provided, read the old value from it and restore EXACTLY
-      that value via update_block patches — change only the fields the user wants back, nothing else.
-    - If no previous state is available, say honestly that you can't see the earlier version and
+15. UNDO / REVERT: when the user asks to undo or bring back a specific previous value — in ANY
+    phrasing: "undo the color change", "put the old title back", "i want the old color theme back",
+    "make the hero like before", "give me the previous colors":
+    - If a PREVIOUS PAGE STATE block is provided, you MUST use it: read the old value from it and
+      restore EXACTLY that value via update_block patches — change only the fields the user wants
+      back, nothing else. NEVER claim you cannot see the previous version when that block is present.
+    - When restoring a previous color theme, emit an update_block patch for EVERY section listed in
+      PREVIOUS PAGE STATE — hero, footer, and every middle section. Skipping even one section leaves
+      mismatched leftover colors on the page.
+    - Only if NO previous state block exists, say honestly that you can't see the earlier version and
       suggest the Undo button (or typing just "undo") which restores the whole previous page instantly.
     - NEVER guess at what the old value might have been.
+16. COLOR-ONLY REQUESTS — CRITICAL: when the user asks only about colors, theme, or palette
+    ("change the theme color", "make it blue", "darker background", "use warmer colors"):
+    - Send update_block patches whose updates contain ONLY the "colors" object (and title/subtitle
+      text colors inside it as needed).
+    - NEVER include "style" in the updates, never change fonts, animation, layout, images, or any
+      text content. The user asked for colors — changing the layout too feels like losing their page.
+    - The same applies in reverse: a layout/style request must not silently change colors.
 """
 
 
@@ -598,6 +680,34 @@ BUILDER_SYSTEM_PROMPT = _build_system_prompt()
 @router.post("/builder/chat", response_model=BuilderChatResponse, dependencies=[Depends(_verify_api_key)])
 async def builder_chat(request: ChatRequest):
     logger.info("Model: %s | user=%s session=%s community=%s", grok.BUILDER_MODEL, request.user_id, request.session_id, request.community_id)
+
+    # 0. Full-undo requests are deterministic — no model call. The frontend keeps
+    # the real page history; revert=True tells it to restore its last snapshot.
+    # Same for color-restore requests when the LAST change was colors-only:
+    # undoing that whole turn restores every section's colors exactly.
+    wants_old_colors = (
+        _has_undo_intent(request.message)
+        and bool(_COLOR_INTENT_RE.search(request.message or ""))
+        and _last_change_was_color_only(request.session_id)
+    )
+    if request.page_context and (_is_full_undo(request.message) or wants_old_colors):
+        logger.info("Full-undo intent detected — returning revert=True without model call")
+        reply = "No problem — I've put your page back to how it was before. Say it again to go back another step."
+        try:
+            append_session_turn(
+                session_id=request.session_id,
+                user_message=request.message,
+                assistant_reply=reply + " [reverted to previous snapshot]",
+            )
+        except Exception as e:
+            logger.warning("Failed to save revert turn: %s", str(e))
+        return BuilderChatResponse(
+            reply=reply,
+            revert=True,
+            user_id=request.user_id,
+            session_id=request.session_id,
+        )
+
     # 1. Retrieve session history
     session_history = get_session_history_prompt(request.session_id)
     history_section = (
@@ -738,8 +848,13 @@ Respond with valid JSON now:
                 section["section_theme"] = ""
             if section.get("image_shape") and section["image_shape"] not in catalog.IMAGE_SHAPES:
                 section["image_shape"] = ""
-            if section_type == "GALLERY" and section.get("section_subtype") not in (None, "", *catalog.GALLERY_SUBTYPES):
-                section["section_subtype"] = "product"
+            if section_type == "GALLERY":
+                if section.get("section_subtype") not in (None, "", *catalog.GALLERY_SUBTYPES):
+                    section["section_subtype"] = "product"
+                # ProductSection only renders styles 1-5; other numbers fall back to 1
+                if section.get("section_subtype") == "product" and section["style"] not in catalog.PRODUCT_SUBTYPE_STYLES:
+                    logger.warning("Clamped product-subtype gallery style %s to 1", section["style"])
+                    section["style"] = 1
             if section_type == "BLOG" and section.get("feed_type"):
                 feed = str(section["feed_type"]).lower()
                 section["feed_type"] = "latest" if feed in ("new", "latest") else "trending"
@@ -788,6 +903,7 @@ Respond with valid JSON now:
     # 6. Validate patches (if present)
     patches = None
     normalized_patch_dicts: list[dict[str, Any]] = []
+    color_only_request = _is_color_only_request(request.message)
     if raw_patches and isinstance(raw_patches, list):
         try:
             normalized = []
@@ -808,6 +924,10 @@ Respond with valid JSON now:
                     p["updates"] = updates
                 for editor_field in ("floating_widgets", "mobile_overrides", "tablet_overrides", "text_offsets"):
                     updates.pop(editor_field, None)
+                # Color-only request: never let a style change ride along
+                if color_only_request and p.get("action") == "update_block" and "style" in updates:
+                    logger.warning("Stripped style=%s from update_block on color-only request", updates["style"])
+                    updates.pop("style", None)
                 if patch_type:
                     # Canonical backend map always wins for style IDs.
                     if "style" in updates:
@@ -830,6 +950,25 @@ Respond with valid JSON now:
                 detail=f"AI returned invalid patch structure: {str(e)} | Raw patches: {raw_patches}",
             )
 
+    # Safety net: the user asked to undo but the model produced no change at all —
+    # fall back to a frontend snapshot revert (the frontend keeps real history)
+    # instead of letting the model claim it "can't see the previous version".
+    revert_fallback = False
+    # Explicit restore intent: "undo"/"revert", or "old/previous/earlier … back"
+    # phrasings ("i want the old color theme back"), or a full-undo phrase.
+    _msg = request.message or ""
+    explicit_undo = (
+        bool(re.search(r"\b(undo|revert)\b", _msg, re.IGNORECASE))
+        # "old … back" in either word order: "i want the old theme back",
+        # "change back the old theme color", "back to the previous colors"
+        or bool(re.search(r"\b(old|previous|earlier|original)\b.{0,40}\bback\b|\bback\b.{0,40}\b(old|previous|earlier|original|before)\b|\blike (it was )?before\b", _msg, re.IGNORECASE))
+        or _is_full_undo(_msg)
+    )
+    if request.page_context and explicit_undo and blueprint is None and not patches:
+        logger.warning("Undo intent produced no patches — falling back to revert=True")
+        revert_fallback = True
+        reply = "I've put your page back to how it was before. Say it again to go back another step."
+
     final_layout = _derive_final_layout(blueprint, patches, page_context_obj)
     style_reasons = _extract_style_reasons(raw_blueprint, normalized_patch_dicts)
     styles_selected = _styles_selected_from_layout(final_layout, style_reasons)
@@ -843,6 +982,11 @@ Respond with valid JSON now:
     # follow-up question doesn't erase the pre-change state.
     if blueprint is not None or patches:
         _store_prev_page_context(request.session_id, request.page_context)
+        changed_colors_only = bool(patches) and blueprint is None and (
+            color_only_request
+            or all(p.action == "update_block" and set(p.updates.keys()) <= {"colors"} for p in patches)
+        )
+        _set_last_change_color_only(request.session_id, changed_colors_only)
 
     # 8. Save this turn to session history (non-critical)
     try:
@@ -862,6 +1006,7 @@ Respond with valid JSON now:
 
     return BuilderChatResponse(
         reply=reply,
+        revert=revert_fallback,
         animation_style=animation_style,
         blueprint=blueprint,
         patches=patches,

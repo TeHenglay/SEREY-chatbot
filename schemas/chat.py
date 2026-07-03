@@ -82,6 +82,10 @@ class BuilderChatResponse(BaseModel):
     """Response from the builder chatbot. Always has a reply; blueprint is present when
     the AI generates or updates a page layout."""
     reply: str = Field(..., description="Conversational reply from the AI")
+    revert: bool = Field(
+        default=False,
+        description="True when the user asked to undo the whole last change — the frontend should restore its previous local snapshot instead of applying patches",
+    )
     animation_style: Optional[str] = Field(
         default=None,
         description="Updated animation style when the user requests a change: none | fade | slide-up | slide-left | blur",
