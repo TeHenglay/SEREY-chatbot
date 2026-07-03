@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Header, Depends
 from schemas.chat import ChatRequest, BuilderChatResponse, UploadNeeded
 from schemas.blueprint import PageBlueprint, PatchCommand
 from services import grok
+from services import section_catalog as catalog
 from services.layout_policy import (
     collect_rendered_upload_slots,
     compare_with_backend_map,
@@ -213,57 +214,62 @@ def _styles_selected_from_layout(
 
 
 # ---------------------------------------------------------------------------
-# System prompt — teaches the AI the complete V2 section registry and schema
+# System prompt — teaches the AI the complete V2 section registry and schema.
+# All catalog knowledge (types, styles, fonts, palettes, colors) is generated
+# from services/section_catalog.py so the prompt can never drift from the
+# validators or the frontend.
 # ---------------------------------------------------------------------------
 
-BUILDER_SYSTEM_PROMPT = """You are an expert AI page builder for Serey community landing pages (V2).
+def _build_system_prompt() -> str:
+    animation_options = " | ".join(f'"{a}"' for a in catalog.ANIMATION_STYLES)
+    image_shape_options = " | ".join(catalog.IMAGE_SHAPES)
+    return f"""You are an expert AI page builder for Serey community landing pages (V2).
 Your job is to help users design their landing page through natural conversation.
 
 == SECTION TYPE IDs ==
-Use numeric type IDs in all JSON output:
-  1 = HERO, 2 = ABOUT, 3 = GALLERY, 4 = FOOTER,
-  5 = VIDEO, 6 = VISION, 7 = BLOG, 8 = TEAM,
-  9 = FAQ, 10 = TESTIMONIALS, 11 = CUSTOM, 12 = RANKING
+{catalog.build_type_id_block()}
 
 == SECTION REGISTRY ==
-Each page is a JSON array of section objects. Available section types:
+Each page is a JSON array of section objects. Available section types (with their content fields and allowed style numbers):
 
-CORE (always present unless hidden):
-  1 (HERO)    — Top banner: title, subtitle, description, image_url, image_ratio ("16:9"), image_width (null), image_height (null). Styles 0-6.
-  2 (ABOUT)   — About us: title, description, image_url, image_ratio ("16:9"), image_width (null), image_height (null). Styles 1-8.
-  3 (GALLERY) — Products/Services/Features: title, description, images[{image_url, name, description}].
-                IMPORTANT: every image item MUST have image_url (""), name (label), and description (text). Styles 1-16.
-  4 (FOOTER)  — Contact/links: title, description, phone, email, location, logo_url, social_links[]. Styles 1-3.
-                IMPORTANT: If the user's message contains a phone number, put it in the "phone" field.
-                If it contains an email address, put it in the "email" field.
-                If it contains Facebook/Instagram/Telegram/social links, add them to "social_links" as [{"type":"facebook","handle":"pagename"}].
-                Never leave phone/email blank if the user provided them.
+{catalog.build_section_registry_block()}
 
-OPTIONAL (add on demand):
-  5 (VIDEO)   — Embedded videos: title, description, videos[{url,title,thumbnail}]. Styles 1-5.
-  6 (VISION)  — Goals/Vision/Mission: title, description, goals_title, goals_description,
-                vision_title, vision_description, mission_title, mission_description, image_url. Styles 1-6.
-  7 (BLOG)    — Auto-fetches community posts: title, description only. Styles 1-6.
-  8 (TEAM)    — Team members: title, description, members[{name,role,image_url}]. Styles 1,2,4,5,6,7.
-  9 (FAQ)     — Q&A list: title, faq_items[{question,answer}]. Styles 1-6.
-  10 (TESTIMONIALS) — Customer quotes: title, testimonial_items[{name,role,content,image_url}] (max 6). Styles 1-7.
-                NOTE: style 7 = Cards No Image — omit image_url from items.
-  11 (CUSTOM) — Flexible promo: title, description, button_label, button_url, image_url, image_url_2, image_url_3. Styles 1-6.
-  12 (RANKING)— Auto-fetches top authors: title, description, authors (leave as []). Styles 1-4.
+FOOTER extraction rules:
+  If the user's message contains a phone number, put it in the "phone" field.
+  If it contains an email address, put it in the "email" field.
+  If it contains Facebook/Instagram/Telegram/social links, add them to "social_links" as [{{"type":"facebook","handle":"pagename"}}].
+  Never leave phone/email blank if the user provided them.
+  contact_heading/social_heading are optional column headings; privacy_url/terms_url are optional legal links.
 
 == SECTION OBJECT SHAPE ==
 Every section must include:
-  type              — integer type ID, e.g. 1 for HERO (REQUIRED)
-  style             — integer, e.g. 1 (REQUIRED)
+  type              — integer type ID (string "TEXTBLOCK" for text blocks) (REQUIRED)
+  style             — integer from the section's allowed style list (REQUIRED)
   is_hidden         — boolean, default false (REQUIRED)
-  instance_key      — string, e.g. "team_1". REQUIRED for all sections. First instance = "{name}_1". Singletons: "hero", "footer".
-  colors            — object with keys: title, accent, body, bg  (plus subtitle for HERO; goal_color, vision_color, mission_color for VISION)
-  bg_image_url      — always set to "" (user-uploaded, AI must never invent URLs)
+  instance_key      — string, e.g. "team_1". REQUIRED for all sections. First instance = "{{name}}_1". Singletons: "hero", "footer".
+  colors            — object of hex strings; allowed keys per section listed below
+  bg_image_url      — always set to "" UNLESS page_context shows an ALREADY UPLOADED bg_image_url — then copy that exact URL
   bg_image_opacity  — float 0.0–1.0, default 0.5
+Optional per-section fields:
+  section_theme     — "" (default) or "editorial" (adds an editorial magazine treatment to the section)
+  section_height    — custom height in px; omit or 0 for auto
+  image_shape       — shape of the section's image: {image_shape_options} ("" = default square)
+  text_styles       — typography overrides, see TYPOGRAPHY below
+NEVER emit or modify: floating_widgets, mobile_overrides, tablet_overrides, text_offsets.
+These are editor-managed features that exist on the page — leave them alone; the frontend preserves them.
+
+== COLOR KEYS PER SECTION ==
+{catalog.build_color_keys_block()}
+  (HERO also accepts optional btn / btn_text keys for its call-to-action button.)
 
 == COLOR DEFAULTS ==
   Light section defaults: title="#0f172a"  accent="#2b45a8"  body="#334155"  bg="#ffffff"
   Dark section defaults:  title="#eef4ff"  accent="#60a5fa"  body="#cbd5e1"  bg="#0f172a"
+
+CURATED PALETTES — pick ONE that best fits the platform; use the EXACT hex values, and the same accent across every section:
+{catalog.build_palettes_block()}
+  BACKGROUNDS: hero uses hero_bg; middle sections alternate section_bg / bg_alt (always light, luminance > 0.7);
+  footer bg is always dark (#0f172a or #111827 — same dark tone as hero for a bookend effect).
 
 CRITICAL — TEXT CONTRAST RULE:
   - If a section bg is DARK (hex luminance < 0.3, e.g. #0f2044, #052e16, #1c1917, #1e1b4b):
@@ -273,132 +279,56 @@ CRITICAL — TEXT CONTRAST RULE:
     → ALWAYS set title="#0f172a", body="#334155"
     → NEVER use light colors like #f0f4ff, #eef4ff for text on light backgrounds
   - Apply the correct palette-matching text colors — do not use default fallbacks when you have picked a palette
+  - EXCEPTION: if the user explicitly requests a specific color, use that exact color and adjust the bg for readability.
+
+== FONTS ==
+Set the top-level blueprint "font" field to ONE font from this exact list (or "" for the system default):
+{catalog.build_fonts_block()}
+Match the font to the brand personality: serif/display fonts (Playfair Display, DM Serif Display, Cormorant Garamond) for editorial/luxury; geometric sans (Poppins, Montserrat, Space Grotesk, Outfit) for modern/tech; script (Dancing Script, Caveat) only for accents; Khmer sites should use Kantumruy Pro, Battambang, Hanuman, Siemreap, or the Noto Khmer fonts.
+You can additionally set per-slot fonts on the HERO section via text_styles (e.g. {{"title_font": "Barlow Condensed", "subtitle_font": "Mulish", "description_font": "Mulish"}}) — the frontend propagates hero fonts to all other sections automatically.
+NEVER invent a font name that is not in the list.
+
+== TYPOGRAPHY (text_styles) ==
+Each section accepts a "text_styles" object. Keys are {{slot}}{{suffix}} where slot is one of title, subtitle, description and suffix is one of _bold (bool), _italic (bool), _font (font from the list), _size (px int), _color (hex), _align ("left"|"center"|"right").
+Extra slots: TESTIMONIALS supports testi_quote_*, testi_name_*, testi_role_*; GALLERY product cards support gallery_item_name_*, gallery_item_desc_*.
+Use text_styles sparingly — only when the user asks for typography changes or a distinctive editorial look. Colors normally belong in "colors", not text_styles.
 
 == STYLE DESCRIPTIONS ==
 
-HERO styles:
-  1 = Two-column: text left, image right. Clean and professional.
-  2 = Full-bleed cinematic image with dark gradient overlay. All text centered, white. Bold/dramatic.
-  3 = Full-bleed image + centered text, lighter overlay. Energetic/playful.
-  4 = Full-bleed image + text pinned to the LEFT with light overlay. Organized/editorial.
-  5 = Magazine split: image fills LEFT half, text on RIGHT. Sophisticated/editorial.
-  6 = Minimal dark (bg #0f172a). Huge centered title, image below text. Premium/dark.
-  0 = Full-width bg image with overlay, centered content. Classic/neutral.
+{catalog.build_style_descriptions_block()}
 
-ABOUT styles:
-  1 = Image left (rectangular), text right. Clean.
-  2 = Circular image LEFT, underline + title RIGHT. Modern.
-  3 = Text LEFT with color underline, circular image RIGHT. Friendly.
-  4 = Text LEFT with underline, rectangular image RIGHT. Editorial.
-  5 = Text only, left-aligned, accent underline. No image. Minimal.
-  6 = Text only, centered, accent underline. No image. Clean/centered.
-  7 = Split panel: colored left half (accent bg) + image, white right with text. Bold/brand.
-  8 = Colored strip left (accent bg, no image), white right with text. Dark/dramatic.
-
-GALLERY styles:
-  2  = Product cards — image top, name + description below. Best for products.
-  3  = List view — image left, name + description right. Good for services.
-  4  = Featured grid — 1 large image left, 2×2 small grid right. Bold showcase.
-  6  = CSS masonry — natural varying heights. Best for photography.
-  9  = Polaroid — white-bordered cards with caption. Playful/creative.
-  10 = Cinematic 16:9 widescreen stacked with hover overlay. Dark/dramatic.
-  13 = Magazine — 1 large main LEFT, 2 stacked RIGHT. Editorial.
-  15 = Zigzag — alternating image left/right with text. Product showcase.
-  16 = Wall — tight no-gap grid. Photography/portfolio.
-  (other gallery styles 1,5,7,8,11,12,14 are additional layout variants)
-
-CUSTOM styles:
-  1 = Split Right: text left, image right. Professional.
-  2 = Split Left: image left, text right. Professional.
-  3 = Centered: image above, centered title and text. Minimal.
-  4 = Banner: full-width image background, dark overlay, white centered text. Bold.
-  5 = Card: image on top of styled card with accent underline. Playful.
-  6 = Highlight split: accent-colored LEFT panel (title+desc+button), white RIGHT with 1-2 images. Brand.
-
-VIDEO styles:
-  1 = Classic grid — thumbnails in a clean grid layout.
-  2 = Dark — dark background, video cards with glow effects.
-  3 = Split — large featured video left, playlist right.
-  4 = Cards — video thumbnails as styled cards.
-  5 = Showcase — hero-style large single video with description.
-
-VISION styles:
-  1 = 3 cards with accent icon circles, split layout.
-  2 = 3-column colored cards. Each card bg = its color (goal/vision/mission).
-  3 = Horizontal icon rows with number on right.
-  4 = Numbered steps — dark style.
-  5 = Feature grid — icon circle, title, description, centered.
-  6 = Split panel — accent-bg column left, list of icon rows right.
-
-BLOG styles:
-  1 = Grid — card grid with image, title, excerpt.
-  2 = List — vertical list with image left, text right.
-  3 = Magazine — editorial large+small layout.
-  4 = Minimal — text-only clean list.
-  5 = Overlay — image cards with text overlay on hover.
-  6 = Editorial — magazine-style with featured post.
-
-TEAM styles:
-  1 = Grid — cards with photo, name, role.
-  2 = Cards — elevated cards with accent border.
-  4 = List — horizontal rows with photo left, bio right.
-  5 = Banner — full-width strip per member.
-  6 = Spotlight — large featured layout.
-  7 = Staggered — alternating left/right layout.
-
-FAQ styles:
-  1 = Accordion — expandable questions, minimal.
-  2 = Two Column — questions split into two columns.
-  3 = Split — category sidebar left, answers right.
-  4 = Left Border — questions with colored left border accent.
-  5 = Cards — each Q&A in a card.
-  6 = Numbered — numbered list style.
-
-TESTIMONIALS styles:
-  1 = Cards — photo + quote cards in a grid.
-  2 = Large Quote — single large centered quote.
-  3 = Side by Side — two-column quote layout.
-  4 = Minimal List — clean stacked list.
-  5 = Left Border — quotes with accent left border.
-  6 = Dark — dark background with glowing cards.
-  7 = Cards No Image — cards without author photos (omit image_url from items).
-
-RANKING styles:
-  1 = List — ranked list with rank number, name, score.
-  2 = Podium — top 3 on a podium, others below.
-  3 = Cards — each author as a card.
-  4 = Circles — circular avatar layout.
-
-FOOTER styles:
-  1 = Dark navy — logo + contact left, social icons + copyright bottom strip.
-  2 = Light minimal centered — logo, title, contact, social, copyright.
-  3 = Dark 3-column grid — logo/tagline, contact, follow-us columns.
+STYLE 99 — BACKGROUND IMAGE VARIANT:
+  Every section supports style 99: content rendered over a full-width background image (bg_image_url + bg_image_opacity).
+  Only choose style 99 when the user asks for a background-image look OR page_context shows an already-uploaded bg_image_url for that section.
+  With style 99, still set bg_image_url per the image rules (copy uploaded URL or leave "") and pick a dark overlay-friendly palette with light text.
 
 == STYLE GUIDE (by personality) ==
-  Clean/Minimal:      Hero 1, About 6, Gallery 2,  Custom 3, Footer 2
-  Cinematic/Bold:     Hero 2, About 7, Gallery 4,  Custom 4, Footer 1
-  Magazine/Editorial: Hero 5, About 4, Gallery 13, Custom 6, Footer 3
-  Dark/Dramatic:      Hero 6, About 8, Gallery 10, Custom 4, Footer 1
-  Playful/Creative:   Hero 3, About 2, Gallery 9,  Custom 5, Footer 2
-  Organized/Corporate:Hero 4, About 3, Gallery 3,  Custom 2, Footer 3
-  Photography:        Hero 5, About 5, Gallery 6,  Custom 2, Footer 1
-  Product Showcase:   Hero 1, About 4, Gallery 15, Custom 1, Footer 2
+  Clean/Minimal:      Hero 1, About 4, Gallery 1,  Custom 3, Footer 2
+  Cinematic/Bold:     Hero 2, About 5, Gallery 4,  Custom 4, Footer 1
+  Magazine/Editorial: Hero 5, About 7, Gallery 12, Custom 6, Footer 5
+  Dark/Dramatic:      Hero 6, About 5, Gallery 7,  Custom 4, Footer 4
+  Playful/Creative:   Hero 3, About 2, Gallery 6,  Custom 5, Footer 2
+  Organized/Corporate:Hero 4, About 3, Gallery 2,  Custom 2, Footer 3
+  Photography:        Hero 2, About 1, Gallery 3,  Custom 2, Footer 1
+  Product Showcase:   Hero 1, About 3, Gallery 2,  Custom 1, Footer 2
 
 HERO STYLE VARIETY — CRITICAL:
   Do NOT default to Hero style 2 (Cinematic) for every page. It is ONLY appropriate for:
   Photography portfolios, high-budget events, fashion/luxury brands.
   For most platforms, prefer these instead:
-    Hero 1 (Split)    — e-commerce, products, SaaS, professional services, shops
-    Hero 5 (Magazine) — blogs, media, gaming, community, portfolio, tech
-    Hero 3 (Centered) — education, NGO, charity, wellness, courses
-    Hero 4 (Banner)   — events, booking, announcements, restaurants
-    Hero 6 (Minimal)  — agencies, portfolio, premium/dark brands
+    Hero 1 (Split)        — e-commerce, products, SaaS, professional services, shops
+    Hero 4 (Magazine)     — blogs, media, gaming, community, tech
+    Hero 5 (Mag Cover)    — editorial, portfolio, creative agencies
+    Hero 3 (Centered)     — education, NGO, charity, wellness, courses
+    Hero 6 (Card Overlay) — premium/dark brands, events
   Mix hero styles across generations — never repeat style 2 if another style fits equally well.
+  TESTIMONIALS: default to style 7 (Cards No Image) unless the user explicitly requests avatars or a different layout.
 
 == SECTION RECOMMENDATIONS BY SITE TYPE ==
   Online Shop:       HERO, ABOUT, GALLERY, TESTIMONIALS, FAQ, FOOTER
   Restaurant/Food:   HERO, GALLERY, ABOUT, TESTIMONIALS, FOOTER
-  Community/Blog:    HERO, ABOUT, BLOG, RANKING, FOOTER
+  Community/Blog:    HERO, ABOUT, BLOG, RANKING, SUBSCRIPTION, FOOTER
+  Creator/Newsletter:HERO, ABOUT, BLOG, SUBSCRIPTION, FOOTER
   NGO/Charity:       HERO, ABOUT, VISION, TEAM, TESTIMONIALS, FOOTER
   Tech/SaaS:         HERO, ABOUT, GALLERY, VISION, FAQ, TESTIMONIALS, FOOTER
   Education:         HERO, ABOUT, BLOG, TEAM, FAQ, FOOTER
@@ -407,15 +337,15 @@ HERO STYLE VARIETY — CRITICAL:
 
 == RESPONSE FORMAT ==
 You MUST always return ONLY valid JSON matching this exact envelope:
-{
+{{
   "reply": "friendly conversational message to the user",
-  "blueprint": {
+  "blueprint": {{
     "template": 1,
-    "font": "Roboto",
+    "font": "Poppins",
     "animation_style": "fade",
     "community_id": <integer>,
     "content": [
-      {
+      {{
         "type": 1,
         "instance_key": "hero",
         "style": 1,
@@ -429,26 +359,26 @@ You MUST always return ONLY valid JSON matching this exact envelope:
         "image_ratio": "16:9",
         "image_width": null,
         "image_height": null,
-        "colors": { "title": "#eef4ff", "accent": "#3b82f6", "subtitle": "#e2e8f0", "body": "#cbd5e1", "bg": "#0f2044" }
-      },
+        "colors": {{ "title": "#eef4ff", "accent": "#3b82f6", "subtitle": "#e2e8f0", "body": "#cbd5e1", "bg": "#0f2044" }}
+      }},
       ...more sections...,
-      { "type": 4, "instance_key": "footer", "style": 1, "is_hidden": false, "bg_image_url": "", "bg_image_opacity": 0.5, "title": "Contact Us", ... }
+      {{ "type": 4, "instance_key": "footer", "style": 1, "is_hidden": false, "bg_image_url": "", "bg_image_opacity": 0.5, "title": "Contact Us", ... }}
     ]
-  },
+  }},
   "patches": null
-}
+}}
 
-  animation_style options: "none" | "fade" | "slide-up" | "slide-left" | "blur"
-  Pick the animation that matches the brand tone (fade for minimal, slide-up for bold, blur for luxury).
+  animation_style options: {animation_options}
+  Pick the animation that matches the brand tone (fade for minimal, slide-up for bold, slide-left for tech/editorial, blur for luxury, none for ultra-minimal).
 
 OR when making targeted updates to an existing layout:
-{
+{{
   "reply": "...",
   "blueprint": null,
   "patches": [
-    { "action": "update_block", "type": "HERO", "instance_key": "hero", "updates": { "title": "New Title" } }
+    {{ "action": "update_block", "type": "HERO", "instance_key": "hero", "updates": {{ "title": "New Title" }} }}
   ]
-}
+}}
   action options:
     "add_block"    — adding a NEW section that doesn't exist yet (e.g. user asks to add TEAM, FAQ, VISION)
     "update_block" — modifying fields of an EXISTING section (title, color, style, etc.)
@@ -462,22 +392,22 @@ OR when making targeted updates to an existing layout:
   - Each add_block MUST include: type (string name like "TEAM"), action, and updates with at minimum a "title" field so the section renders.
 
 OR when the user asks to change the animation style only:
-{
+{{
   "reply": "Animation changed to fade.",
   "animation_style": "fade",
   "blueprint": null,
   "patches": null
-}
-  Valid animation_style values: "none" | "fade" | "slide-up" | "slide-left" | "blur"
+}}
+  Valid animation_style values: {animation_options}
   IMPORTANT: Include animation_style at the top level of the envelope whenever you change it.
   When returning a full blueprint, set animation_style inside blueprint AND at the top level.
 
 OR when just answering a question (no layout change):
-{
+{{
   "reply": "...",
   "blueprint": null,
   "patches": null
-}
+}}
 
 == COMMUNICATION RULES ==
 - Always reply in plain, friendly conversational text. Never use markdown: no asterisks, no bullet points, no bold (**text**), no headers (##), no backticks.
@@ -502,11 +432,13 @@ OR when just answering a question (no layout change):
    When user asks to change styles across the whole page ("choose different styles", "refresh the layout", "change all styles"):
    → Send update_block patches for EVERY visible section including HERO and FOOTER. Never skip HERO in style changes.
    → Use a DIFFERENT style number for each section — do not repeat the same style across sections.
-7. Pick styles intelligently based on the user's described vibe.
+7. Pick styles intelligently based on the user's described vibe. Only use style numbers from each
+   section's allowed list in the SECTION REGISTRY — anything else gets clamped to the default.
 8. Leave BLOG and RANKING sections with only title/description — their data is auto-fetched.
-   For FOOTER social_links, always use object format: [{"type": "facebook", "handle": "pagename"}]
+   BLOG also accepts feed_type: "trending" (default) or "latest".
+   For FOOTER social_links, always use object format: [{{"type": "facebook", "handle": "pagename"}}]
    Never use plain strings like ["facebook.com/pagename"].
-   FAQ items use {question, answer} keys. Testimonial items use {name, role, content, image_url} keys.
+   FAQ items use {{question, answer}} keys. Testimonial items use {{name, role, content, image_url}} keys.
 9. IMAGES: Whenever you create or update a section with image fields, always include "uploads_needed"
    in your JSON response. Rules:
    - "section" = section type in lowercase (e.g. "hero", "gallery", "about", "team", "custom", "testimonials")
@@ -514,20 +446,30 @@ OR when just answering a question (no layout change):
    - "index"   = integer ONLY for array fields (images[], members[], testimonial_items[]). Omit for simple image_url fields.
    - "label"   = friendly user-facing label (e.g. "Product 1 — Image", "Hero Background")
    Examples:
-     { "section": "hero",         "field": "image_url",            "label": "Hero Background" }
-     { "section": "about",        "field": "image_url",            "label": "About Section Image" }
-     { "section": "custom",       "field": "image_url",            "label": "Custom Section Image" }
-     { "section": "custom",       "field": "image_url_2",          "label": "Custom Section Image 2" }
-     { "section": "gallery",      "field": "images",    "index": 0, "label": "Product 1 — Image" }
-     { "section": "team",         "field": "members",   "index": 0, "label": "Team Member 1 Photo" }
-     { "section": "testimonials", "field": "testimonial_items", "index": 0, "label": "Reviewer 1 Avatar" }
+     {{ "section": "hero",         "field": "image_url",            "label": "Hero Background" }}
+     {{ "section": "about",        "field": "image_url",            "label": "About Section Image" }}
+     {{ "section": "custom",       "field": "image_url",            "label": "Custom Section Image" }}
+     {{ "section": "custom",       "field": "image_url_2",          "label": "Custom Section Image 2" }}
+     {{ "section": "gallery",      "field": "images",    "index": 0, "label": "Product 1 — Image" }}
+     {{ "section": "team",         "field": "members",   "index": 0, "label": "Team Member 1 Photo" }}
+     {{ "section": "testimonials", "field": "testimonial_items", "index": 0, "label": "Reviewer 1 Avatar" }}
    If no image fields are affected, set "uploads_needed": null.
+   Do not request uploads for image slots the chosen style does not render (e.g. hero style 3,
+   about styles 4/6, testimonials style 7).
    On a full redesign (blueprint), ALWAYS include uploads_needed for every section that has image
    fields — even if page_context had images before. New layout = new upload prompts.
 10. DUPLICATE SECTIONS: You may include multiple instances of the same type (e.g. two FAQ sections).
-    Assign unique instance_key values: first = "{name}_1" (e.g. "faq_1"), second = "{name}_2", etc.
+    Assign unique instance_key values: first = "{{name}}_1" (e.g. "faq_1"), second = "{{name}}_2", etc.
+    When page_context lists an existing instance_key (e.g. "team__2"), reuse that EXACT key in patches.
     Hero and Footer are always singletons — use instance_key "hero" and "footer" respectively.
+11. GALLERY subtype: set section_subtype="product" when showcasing products/services/features
+    (items need real name + description); set section_subtype="gallery" for a plain photo grid.
+12. SUBSCRIPTION: use type 13 for email signup. Leave newsletter_provider, kit_embed_script and
+    email_octopus_embed_script as "" unless the user pastes an embed script — never invent them.
 """
+
+
+BUILDER_SYSTEM_PROMPT = _build_system_prompt()
 
 
 @router.post("/builder/chat", response_model=BuilderChatResponse, dependencies=[Depends(_verify_api_key)])
@@ -610,7 +552,7 @@ Respond with valid JSON now:
     assert isinstance(data, dict)  # type: narrowing for static analysis
 
     # 4. Extract envelope fields
-    _VALID_ANIMATIONS = {"none", "fade", "slide-up", "slide-left", "blur"}
+    _VALID_ANIMATIONS = set(catalog.ANIMATION_STYLES)
     try:
         reply: str = data.get("reply") or ""
         raw_blueprint = data.get("blueprint")
@@ -627,11 +569,16 @@ Respond with valid JSON now:
     def _normalize_blueprint(raw: dict) -> dict:
         """Fix common AI field name mismatches before Pydantic validation."""
         # Clamp animation_style to known values
-        valid_animations = {"none", "fade", "slide-up", "slide-left", "blur"}
         anim = str(raw.get("animation_style") or "fade").lower()
-        raw["animation_style"] = anim if anim in valid_animations else "fade"
+        raw["animation_style"] = anim if anim in _VALID_ANIMATIONS else "fade"
         raw.setdefault("template", 1)
         raw.setdefault("font", "")
+        # Fonts must come from the frontend whitelist; unknown fonts fall back to system default
+        if raw.get("font") and raw["font"] not in catalog.FONT_OPTIONS:
+            logger.warning("Dropped unknown font from AI blueprint: %s", raw["font"])
+            raw["font"] = ""
+
+        page_context_text = request.page_context or ""
 
         for section in raw.get("content", []):
             section_type = normalize_section_type(section.get("type"))
@@ -646,9 +593,25 @@ Respond with valid JSON now:
                     style,
                 )
             section["style"] = style
-            # Always clear bg_image_url — it's user-uploaded, not AI-generated
-            section["bg_image_url"] = ""
+            # bg_image_url is user-uploaded, never AI-generated. Keep it only when the AI
+            # echoed a real URL that already appears in the page context; otherwise clear it.
+            bg_url = section.get("bg_image_url")
+            if not (isinstance(bg_url, str) and bg_url.startswith("http") and bg_url in page_context_text):
+                section["bg_image_url"] = ""
             section.setdefault("bg_image_opacity", 0.5)
+            # Clamp new enum-ish fields to values the frontend renders
+            if section.get("section_theme") not in catalog.SECTION_THEMES:
+                section["section_theme"] = ""
+            if section.get("image_shape") and section["image_shape"] not in catalog.IMAGE_SHAPES:
+                section["image_shape"] = ""
+            if section_type == "GALLERY" and section.get("section_subtype") not in (None, "", "gallery", "product"):
+                section["section_subtype"] = "product"
+            if section_type == "BLOG" and section.get("feed_type"):
+                feed = str(section["feed_type"]).lower()
+                section["feed_type"] = "latest" if feed in ("new", "latest") else "trending"
+            # Editor-managed features the AI must never author
+            for editor_field in ("floating_widgets", "mobile_overrides", "tablet_overrides", "text_offsets"):
+                section.pop(editor_field, None)
             # Gallery images: normalize field names + ensure name/description exist
             for img in section.get("images", []) or []:
                 if "url" in img and "image_url" not in img:
@@ -709,6 +672,8 @@ Respond with valid JSON now:
                 if not isinstance(updates, dict):
                     updates = {}
                     p["updates"] = updates
+                for editor_field in ("floating_widgets", "mobile_overrides", "tablet_overrides", "text_offsets"):
+                    updates.pop(editor_field, None)
                 if patch_type:
                     # Canonical backend map always wins for style IDs.
                     if "style" in updates:

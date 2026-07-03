@@ -1,28 +1,14 @@
 # Pydantic v2 schemas for the Serey V2 landing page builder.
-# Section types use numeric IDs (1-12) in API responses; strings are used internally.
+# Section types use numeric IDs (1-14) in API responses; strings are used internally.
+# TEXTBLOCK is string-only (no numeric ID) and serializes as "TEXTBLOCK".
 # API contract: POST /api/v2/landing-pages body = { template, font, animation_style, community_id, content: [...sections] }
 
 from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, field_serializer
 
+from services.section_catalog import SECTION_TYPE_ID_MAP, SECTION_TYPE_NAME_TO_ID
 
-# Numeric type ID → canonical string name
-SECTION_TYPE_ID_MAP: dict[int, str] = {
-    1: "HERO",
-    2: "ABOUT",
-    3: "GALLERY",
-    4: "FOOTER",
-    5: "VIDEO",
-    6: "VISION",
-    7: "BLOG",
-    8: "TEAM",
-    9: "FAQ",
-    10: "TESTIMONIALS",
-    11: "CUSTOM",
-    12: "RANKING",
-}
-
-_SECTION_TYPE_NAME_TO_ID: dict[str, int] = {v: k for k, v in SECTION_TYPE_ID_MAP.items()}
+_SECTION_TYPE_NAME_TO_ID: dict[str, int] = SECTION_TYPE_NAME_TO_ID
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +98,7 @@ SECTION_TYPES = Literal[
     "HERO", "ABOUT", "GALLERY", "FOOTER",
     "VIDEO", "VISION", "BLOG", "TEAM",
     "FAQ", "TESTIMONIALS", "CUSTOM", "RANKING",
+    "SUBSCRIPTION", "NEWSLETTER", "TEXTBLOCK",
 ]
 
 
@@ -124,11 +111,19 @@ class SectionBlock(BaseModel):
     instance_key: str | None = Field(None, description="Unique key for duplicate section instances, e.g. 'team_1'")
     colors: dict[str, str] | None = Field(
         None,
-        description="Color overrides: title, accent, body, bg, subtitle, goal_color, vision_color, mission_color",
+        description="Color overrides: title, accent, body, bg, subtitle, goal_color, vision_color, mission_color, card_bg, btn, btn_text",
     )
-    text_styles: dict[str, Any] | None = Field(None, description="Optional per-section text style overrides")
+    text_styles: dict[str, Any] | None = Field(
+        None,
+        description="Per-slot typography: {title|subtitle|description}_{bold|italic|font|size|color|align} (+testi_*/gallery_item_* slots)",
+    )
+    text_offsets: dict[str, Any] | None = Field(None, description="Editor-managed text position offsets — pass through, never invent")
     bg_image_url: str = Field("", description="Background image URL — leave empty; user-uploaded")
     bg_image_opacity: float = Field(0.5, description="Background image opacity 0.0–1.0")
+    section_theme: str = Field("", description="Per-section theme variant: '' (default) | 'editorial'")
+    section_height: int = Field(0, description="Custom section height in px; 0 = auto")
+    mobile_overrides: dict[str, Any] | None = Field(None, description="Editor-managed responsive overrides — pass through, never invent")
+    tablet_overrides: dict[str, Any] | None = Field(None, description="Editor-managed responsive overrides — pass through, never invent")
 
     # --- shared text fields ---
     title: str | None = None
@@ -138,15 +133,27 @@ class SectionBlock(BaseModel):
     image_ratio: str | None = None
     image_width: int | None = None
     image_height: int | None = None
+    image_shape: str | None = Field(
+        None,
+        description="Image shape: square | rounded | circle | arch | diamond | hexagon | blob | star ('' = default)",
+    )
 
     # --- GALLERY ---
     images: list[GalleryImage] | None = None
+    section_subtype: str | None = Field(
+        None,
+        description="GALLERY only: 'product' (name+description cards) | 'gallery' (photo grid)",
+    )
 
     # --- FOOTER ---
     phone: str | None = None
     email: str | None = None
     location: str | None = None
     logo_url: str | None = None
+    contact_heading: str | None = None
+    social_heading: str | None = None
+    privacy_url: str | None = None
+    terms_url: str | None = None
     social_links: list[SocialLink] | None = None
 
     @field_validator("social_links", mode="before")
@@ -185,10 +192,22 @@ class SectionBlock(BaseModel):
     # --- RANKING ---
     authors: list[Any] | None = None
 
+    # --- BLOG ---
+    feed_type: str | None = Field(None, description="BLOG only: 'trending' | 'latest'")
+
+    # --- SUBSCRIPTION ---
+    placeholder_text: str | None = None
+    newsletter_provider: str | None = Field(None, description="'' | 'kit' | 'email_octopus'")
+    kit_embed_script: str | None = None
+    email_octopus_embed_script: str | None = None
+
+    # --- TEXTBLOCK ---
+    content: str | None = Field(None, description="TEXTBLOCK only: free-form rich text content")
+
     @field_serializer("type")
-    def serialize_type(self, value: str) -> int:
-        """Output numeric type ID for the frontend."""
-        return _SECTION_TYPE_NAME_TO_ID.get(value, 0)
+    def serialize_type(self, value: str) -> int | str:
+        """Output numeric type ID for the frontend; string-only types (TEXTBLOCK) stay strings."""
+        return _SECTION_TYPE_NAME_TO_ID.get(value, value)
 
 
 # ---------------------------------------------------------------------------

@@ -2,112 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-
-SECTION_TYPE_ID_MAP: dict[int, str] = {
-    1: "HERO",
-    2: "ABOUT",
-    3: "GALLERY",
-    4: "FOOTER",
-    5: "VIDEO",
-    6: "VISION",
-    7: "BLOG",
-    8: "TEAM",
-    9: "FAQ",
-    10: "TESTIMONIALS",
-    11: "CUSTOM",
-    12: "RANKING",
-}
-
-SECTION_STYLE_MAP: dict[str, dict[str, Any]] = {
-    "HERO": {
-        "allowed_styles": tuple(range(0, 7)),
-        "rendered_fields": {style: ("image_url",) for style in range(0, 7)},
-    },
-    "ABOUT": {
-        "allowed_styles": tuple(range(1, 9)),
-        "rendered_fields": {
-            1: ("image_url",),
-            2: ("image_url",),
-            3: ("image_url",),
-            4: ("image_url",),
-            5: (),
-            6: (),
-            7: ("image_url",),
-            8: (),
-        },
-    },
-    "GALLERY": {
-        "allowed_styles": tuple(range(1, 17)),
-        "rendered_fields": {style: ("images",) for style in range(1, 17)},
-    },
-    "FOOTER": {
-        "allowed_styles": (1, 2, 3),
-        "rendered_fields": {
-            1: ("logo_url",),
-            2: ("logo_url",),
-            3: ("logo_url",),
-        },
-    },
-    "VIDEO": {
-        "allowed_styles": (1, 2, 3, 4, 5),
-        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5)},
-    },
-    "VISION": {
-        "allowed_styles": tuple(range(1, 7)),
-        "rendered_fields": {style: () for style in range(1, 7)},
-    },
-    "BLOG": {
-        "allowed_styles": (1, 2, 3, 4, 5, 6),
-        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5, 6)},
-    },
-    "TEAM": {
-        "allowed_styles": (1, 2, 4, 5, 6, 7),
-        "rendered_fields": {style: ("members",) for style in (1, 2, 4, 5, 6, 7)},
-    },
-    "FAQ": {
-        "allowed_styles": (1, 2, 3, 4, 5, 6),
-        "rendered_fields": {style: () for style in (1, 2, 3, 4, 5, 6)},
-    },
-    "TESTIMONIALS": {
-        "allowed_styles": (1, 2, 3, 4, 5, 6, 7),
-        # style 7 = Cards No Image — no image uploads needed
-        "rendered_fields": {**{style: ("testimonial_items",) for style in (1, 2, 3, 4, 5, 6)}, 7: ()},
-    },
-    "CUSTOM": {
-        "allowed_styles": tuple(range(1, 7)),
-        "rendered_fields": {
-            1: ("image_url",),
-            2: ("image_url",),
-            3: ("image_url",),
-            4: ("image_url",),
-            5: ("image_url",),
-            6: ("image_url", "image_url_2"),
-        },
-    },
-    "RANKING": {
-        "allowed_styles": (1, 2, 3, 4),
-        "rendered_fields": {style: () for style in (1, 2, 3, 4)},
-    },
-}
+# Canonical section/style knowledge lives in section_catalog (mirrored from
+# the fe-serey-web frontend). This module only holds the derivation logic.
+from services.section_catalog import (
+    ARRAY_UPLOAD_LABELS as _ARRAY_UPLOAD_LABELS,
+    SCALAR_UPLOAD_LABELS as _SCALAR_UPLOAD_LABELS,
+    SECTION_STYLE_MAP,
+    SECTION_TYPE_ID_MAP,
+)
 
 _ARRAY_FIELD_IMAGE_KEY = {
     "images": "image_url",
     "members": "image_url",
     "testimonial_items": "image_url",
-}
-
-_SCALAR_UPLOAD_LABELS = {
-    ("hero", "image_url"): "Hero Background",
-    ("about", "image_url"): "About Section Image",
-    ("custom", "image_url"): "Custom Section Image",
-    ("custom", "image_url_2"): "Custom Section Image 2",
-    ("footer", "logo_url"): "Footer Logo",
-}
-
-_ARRAY_UPLOAD_LABELS = {
-    ("gallery", "images"): "Product {n} — Image",
-    ("team", "members"): "Team Member {n} Photo",
-    ("testimonials", "testimonial_items"): "Reviewer {n} Avatar",
 }
 
 

@@ -7,64 +7,57 @@ from fastapi import APIRouter, HTTPException
 from schemas.requests import BuilderRequest
 from schemas.blueprint import PageBlueprint
 from services import grok, memory
+from services import section_catalog as catalog
 import json
 import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are an expert AI page builder for Serey community landing pages (V2).
+# Section/style/palette knowledge is generated from services/section_catalog.py
+# (mirrored from the frontend) so this prompt cannot drift from the validators.
+SYSTEM_PROMPT = f"""You are an expert AI page builder for Serey community landing pages (V2).
 Generate a complete landing page JSON blueprint from the user's description.
 
+== SECTION TYPE IDs ==
+{catalog.build_type_id_block()}
+
 == SECTION REGISTRY ==
-Each page is a JSON array of section objects. Available section types:
+Each page is a JSON array of section objects. Available section types (with content fields and allowed style numbers):
 
-CORE:
-  HERO        — title, subtitle, description, image_url. Styles 0-6.
-  ABOUT       — title, description, image_url. Styles 1-8.
-  GALLERY     — title, description, images[{image_url,name,description}]. Styles 1-16.
-  FOOTER      — title, description, phone, email, location, logo_url, social_links[{type,handle}]. Styles 1-3.
-
-OPTIONAL:
-  VIDEO       — title, description, videos[{url,title,thumbnail}].
-  VISION      — title, description, goals_title, goals_description, vision_title, vision_description, mission_title, mission_description. Styles 1-6.
-  BLOG        — title, description only (data auto-fetched).
-  TEAM        — title, description, members[{name,role,image_url}].
-  FAQ         — title, faq_items[{q,a}].
-  TESTIMONIALS— title, testimonial_items[{name,role,quote,image_url}] (max 6).
-  CUSTOM      — title, description, button_label, button_url, image_url, image_url_2. Styles 1-6.
-  RANKING     — title, description only (data auto-fetched).
+{catalog.build_section_registry_block()}
 
 == SECTION RECOMMENDATIONS BY SITE TYPE ==
   Online Shop:     HERO, ABOUT, GALLERY, TESTIMONIALS, FAQ, FOOTER
   Restaurant/Food: HERO, GALLERY, ABOUT, TESTIMONIALS, FOOTER
-  Community/Blog:  HERO, ABOUT, BLOG, RANKING, FOOTER
+  Community/Blog:  HERO, ABOUT, BLOG, RANKING, SUBSCRIPTION, FOOTER
   NGO/Charity:     HERO, ABOUT, VISION, TEAM, TESTIMONIALS, FOOTER
   Tech/SaaS:       HERO, ABOUT, GALLERY, VISION, FAQ, TESTIMONIALS, FOOTER
   Education:       HERO, ABOUT, BLOG, TEAM, FAQ, FOOTER
   Photography:     HERO, GALLERY, ABOUT, FOOTER
 
-== COLOR DEFAULTS ==
-  title: "#0f3460"  accent: "#2b45a8"  body: "#444444"  bg: "#ffffff"
-  Hero accent default: "#c0392b"
+== FONTS ==
+Set the blueprint "font" field to ONE font from this list (or "" for system default):
+{catalog.build_fonts_block()}
 
-== STYLE GUIDE ==
-  Clean/Minimal:  Hero 1, About 1, Gallery 2,  Custom 3
-  Cinematic/Bold: Hero 2, About 7, Gallery 4,  Custom 4
-  Magazine:       Hero 5, About 4, Gallery 13, Custom 6
-  Dark/Dramatic:  Hero 6, About 8, Gallery 10, Custom 4
+== CURATED PALETTES — pick one, use the exact hex values ==
+{catalog.build_palettes_block()}
+
+== COLOR KEYS PER SECTION ==
+{catalog.build_color_keys_block()}
 
 == RULES ==
 1. Return ONLY valid JSON — no markdown, no backticks, no text outside the JSON.
 2. Always include HERO at top and FOOTER at bottom.
 3. Set community_id to the value provided in context.
-4. Always set image_url to "" — never invent image URLs.
+4. Always set image_url (and every image field) to "" — never invent image URLs.
 5. Use the user's preferences from memory to personalise color and style choices.
-6. Output schema:
-{
+6. Only use style numbers from each section's allowed list above.
+7. Output schema:
+{{
   "community_id": <integer>,
   "content": [ ...section objects... ]
-}
+}}
 """
 
 
