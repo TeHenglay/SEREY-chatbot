@@ -66,6 +66,7 @@ def _is_color_only_request(message: str) -> bool:
         return False
     return bool(_COLOR_INTENT_RE.search(message)) and not _LAYOUT_INTENT_RE.search(message)
 _KHMER_UNDO_TERMS = ("ដូចមុន", "ត្រឡប់", "ត្រលប់", "មិនយក")
+_KHMER_CHAR_RE = re.compile(r"[ក-៿]")
 
 # Explicit restore intent — used to GATE deterministic reverts (unlike the
 # broad _UNDO_INTENT_RE above, which only gates prompt injection). Matches
@@ -784,6 +785,9 @@ OR when just answering a question (no layout change):
 18. ADVISOR MODE — act like a design consultant, not a passive tool. When the user asks for your
     opinion, a review, or help improving the site ("what do you think", "how does it look", "any
     suggestions", "how can I improve this", "is this good"):
+    BOUNDARY with rule 13: an IMPERATIVE ("make it look better", "improve the design", "10x it")
+    is a command — do the design pass immediately. A QUESTION or request for input ("what do you
+    think", "how can I improve", "any suggestions?") is a consultation — advise first, change nothing.
     - Actually AUDIT the PAGE STATE before answering. Check concretely: Is there a clear
       call-to-action? Are there empty image slots (image_url: "")? Is the copy still generic or
       placeholder-like? Are there sections a site like this usually needs but that are "NOT on page"
@@ -825,7 +829,11 @@ async def builder_chat(request: ChatRequest):
     )
     if request.page_context and (_is_full_undo(request.message) or wants_old_colors):
         logger.info("Full-undo intent detected — returning revert=True without model call")
-        reply = "No problem — I've put your page back to how it was before. Say it again to go back another step."
+        reply = (
+            "គ្មានបញ្ហាទេ — ខ្ញុំបានដាក់ទំព័ររបស់អ្នកត្រឡប់ទៅដូចមុនវិញហើយ។ និយាយម្តងទៀតដើម្បីត្រឡប់ក្រោយមួយជំហានទៀត។"
+            if _KHMER_CHAR_RE.search(request.message or "")
+            else "No problem — I've put your page back to how it was before. Say it again to go back another step."
+        )
         try:
             append_session_turn(
                 session_id=request.session_id,
@@ -1082,10 +1090,13 @@ Respond with valid JSON now:
                     p["updates"] = updates
                 for editor_field in ("floating_widgets", "mobile_overrides", "tablet_overrides", "text_offsets"):
                     updates.pop(editor_field, None)
-                # Color-only request: never let a style change ride along
-                if color_only_request and p.get("action") == "update_block" and "style" in updates:
-                    logger.warning("Stripped style=%s from update_block on color-only request", updates["style"])
-                    updates.pop("style", None)
+                # Color-only request: never let layout/appearance changes ride
+                # along (rule 17 forbids more than just "style").
+                if color_only_request and p.get("action") == "update_block":
+                    for banned in ("style", "image_shape", "section_theme", "section_height"):
+                        if banned in updates:
+                            logger.warning("Stripped %s=%s from update_block on color-only request", banned, updates[banned])
+                            updates.pop(banned, None)
                 # Same item-key compat fixes as blueprints (patches previously
                 # passed q/a/quote/platform/title through to the frontend raw)
                 for item in updates.get("faq_items") or []:
@@ -1141,7 +1152,11 @@ Respond with valid JSON now:
     if request.page_context and explicit_undo and blueprint is None and not patches:
         logger.warning("Undo intent produced no patches — falling back to revert=True")
         revert_fallback = True
-        reply = "I've put your page back to how it was before. Say it again to go back another step."
+        reply = (
+            "ខ្ញុំបានដាក់ទំព័ររបស់អ្នកត្រឡប់ទៅដូចមុនវិញហើយ។ និយាយម្តងទៀតដើម្បីត្រឡប់ក្រោយមួយជំហានទៀត។"
+            if _KHMER_CHAR_RE.search(_msg)
+            else "I've put your page back to how it was before. Say it again to go back another step."
+        )
 
     final_layout = _derive_final_layout(blueprint, patches, page_context_obj)
     style_reasons = _extract_style_reasons(raw_blueprint, normalized_patch_dicts)

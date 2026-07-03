@@ -89,8 +89,10 @@ def generate_builder(prompt: str, system: str | None = None) -> str:
                 model=_GROK_BUILDER_MODEL,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=4096,
-                timeout=60,
+                # 4096 could truncate a large 7-section blueprint mid-JSON,
+                # guaranteeing a parse failure + retry + 422.
+                max_tokens=8192,
+                timeout=90,
                 extra_headers={"x-grok-conv-id": "serey-builder-v1"},
             )
             if not response.choices[0].message.content:
