@@ -39,3 +39,49 @@ class BuilderRequest(BaseModel):
     user_id: str = Field(..., min_length=1, max_length=128)
     session_id: str = Field(..., min_length=1, max_length=128)
     n_components: int = Field(default=4, ge=1, le=8)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/builder/match-products — vision matching of product names to
+# uploaded product photos.
+# ---------------------------------------------------------------------------
+
+class ImageSlot(BaseModel):
+    """One uploaded product photo. `index` is the frontend's slot position,
+    echoed back untouched so the caller can apply matches in place."""
+    image_url: str = Field(..., min_length=8, max_length=2000)
+    index: int | None = Field(None, ge=0)
+
+    @model_validator(mode="after")
+    def check_url(self) -> "ImageSlot":
+        if not self.image_url.startswith(("http://", "https://")):
+            raise ValueError("image_url must be an http(s) URL")
+        return self
+
+
+class ProductInfo(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    details: str = Field("", max_length=500)
+
+
+class MatchProductsRequest(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=128)
+    session_id: str = Field(..., min_length=1, max_length=128)
+    community_id: str | int | None = Field(None)
+    images: list[ImageSlot] = Field(..., min_length=1, max_length=12)
+    products: list[ProductInfo] = Field(..., min_length=1, max_length=12)
+    language: str | None = Field(None, description="Description language, e.g. 'en' | 'kh'")
+
+
+class ProductMatch(BaseModel):
+    image_url: str
+    index: int | None = None
+    name: str = ""          # matched product name; "" when no confident match
+    description: str = ""   # short grounded description; "" when unmatched
+    confidence: str = "low"  # high | medium | low
+
+
+class MatchProductsResponse(BaseModel):
+    matches: list[ProductMatch]
+    unmatched_products: list[str]
+    reply: str

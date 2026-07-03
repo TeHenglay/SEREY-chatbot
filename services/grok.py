@@ -16,10 +16,14 @@ _api_key = os.getenv("GROK_API_KEY")
 _GROK_BASE_URL = "https://api.x.ai/v1"
 _GROK_MODEL = "grok-3-mini"
 _GROK_BUILDER_MODEL = "grok-4.3"
+# Vision model for image-understanding calls. Override with GROK_VISION_MODEL
+# (e.g. "grok-2-vision-1212") if the default rejects image input.
+_GROK_VISION_MODEL = os.getenv("GROK_VISION_MODEL", "grok-4.3")
 
 # Public aliases for route-level logging
 CHAT_MODEL = _GROK_MODEL
 BUILDER_MODEL = _GROK_BUILDER_MODEL
+VISION_MODEL = _GROK_VISION_MODEL
 
 # Module-level cached client instances
 _client: OpenAI | None = None
@@ -99,6 +103,42 @@ def generate_builder(prompt: str, system: str | None = None) -> str:
         except Exception as e:
             if attempt == 0:
                 logger.warning("Grok builder attempt 1 failed (%s), retrying in 2s...", str(e))
+                time.sleep(2)
+            else:
+                raise
+
+
+def generate_vision(text_prompt: str, image_urls: list[str], system: str | None = None) -> str:
+    """Send a text prompt plus images to the Grok vision model, return raw text.
+
+    Images are passed by URL (must be publicly fetchable). Low temperature —
+    used for deterministic tasks like matching product names to photos.
+    """
+    client = _get_client()
+    content: list[dict] = [{"type": "text", "text": text_prompt}]
+    content += [
+        {"type": "image_url", "image_url": {"url": url, "detail": "low"}}
+        for url in image_urls
+    ]
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": content})
+    for attempt in range(2):
+        try:
+            response = client.chat.completions.create(
+                model=_GROK_VISION_MODEL,
+                messages=messages,
+                temperature=0.2,
+                max_tokens=1500,
+                timeout=60,
+            )
+            if not response.choices[0].message.content:
+                raise ValueError("Grok returned empty vision response")
+            return response.choices[0].message.content
+        except Exception as e:
+            if attempt == 0:
+                logger.warning("Grok vision attempt 1 failed (%s), retrying in 2s...", str(e))
                 time.sleep(2)
             else:
                 raise
