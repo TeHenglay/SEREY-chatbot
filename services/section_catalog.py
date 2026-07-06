@@ -433,6 +433,37 @@ def build_templates_block() -> str:
     return "\n".join(lines)
 
 
+# Style guidance for sections the onboarding flow appends BEYOND a template's
+# base structure (the "Add more sections?" picker splices them before FOOTER).
+# Keyed by template id; each value: (styles that fit the template's vibe,
+# styles to avoid). Mirrors the cheat sheet in BUILDER_V2_AI_BACKEND.md.
+TEMPLATE_EXTRA_STYLE_GUIDE: dict[str, dict[str, str]] = {
+    "ecommerce": {
+        "use": "bold high-contrast layouts — GALLERY product s5, VISION s2, TEAM s5, FAQ s1, SUBSCRIPTION s7",
+        "avoid": "soft serif/editorial styles (style-7 panels, magazine layouts)",
+    },
+    "creator": {
+        "use": "dark modern visual layouts — GALLERY s6/s9, VIDEO s2, VISION s4, SUBSCRIPTION s3",
+        "avoid": "light pastel or plain 3-column text styles",
+    },
+    "portfolio": {
+        "use": "clean white minimal text-led layouts — ABOUT s5, CUSTOM s2, FAQ s3, VISION s5",
+        "avoid": "cinematic dark styles and product-card shelves",
+    },
+    "publisher": {
+        "use": "editorial serif layouts — any style-7 editorial variant, GALLERY s3/s12, TEAM s4, FAQ s2",
+        "avoid": "product cards and dark e-commerce styles",
+    },
+}
+
+
+def build_template_extras_block() -> str:
+    lines: list[str] = []
+    for name, g in TEMPLATE_EXTRA_STYLE_GUIDE.items():
+        lines.append(f"  {name}: use {g['use']}; avoid {g['avoid']}")
+    return "\n".join(lines)
+
+
 # Sections the AI may generate. NEWSLETTER is excluded — the current frontend
 # cannot parse numeric type 14; use SUBSCRIPTION (13) for email signup.
 GENERATABLE_SECTIONS: tuple[str, ...] = (
