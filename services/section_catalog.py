@@ -282,6 +282,7 @@ CURATED_PALETTES: dict[str, dict[str, str]] = {
     "royal-purple":      {"hero_bg": "#1e1b4b", "title": "#f5f3ff", "accent": "#7c3aed", "section_bg": "#fafafa", "bg_alt": "#f5f3ff", "vibe": "creative, premium, luxury"},
     "warm-amber":        {"hero_bg": "#1c1917", "title": "#fef3c7", "accent": "#f59e0b", "section_bg": "#ffffff", "bg_alt": "#fffbeb", "vibe": "restaurant, food, artisan"},
     "coral-energy":      {"hero_bg": "#fff1f2", "title": "#0f172a", "accent": "#e11d48", "section_bg": "#ffffff", "bg_alt": "#fff1f2", "vibe": "fitness, events, media"},
+    "editorial-cream":   {"hero_bg": "#faf6ef", "title": "#1c1a17", "accent": "#b5232a", "section_bg": "#fdf9f4", "bg_alt": "#f3ebe0", "vibe": "magazine, editorial, publishing, journalism, food & culture, literary"},
     "minimal-slate":     {"hero_bg": "#f8fafc", "title": "#0f172a", "accent": "#1d4ed8", "section_bg": "#ffffff", "bg_alt": "#f1f5f9", "vibe": "clean, portfolio, NGO"},
     "gaming-dark":       {"hero_bg": "#0d0d1a", "title": "#f0f4ff", "accent": "#7c3aed", "section_bg": "#f8f8ff", "bg_alt": "#f0f0ff", "vibe": "gaming, esports, entertainment"},
 }

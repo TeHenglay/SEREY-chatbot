@@ -61,8 +61,8 @@ DESIGN_RECIPES: dict[str, dict] = {
         "notes": "Cozy and tactile. Use image_shape 'arch' on about/custom images. Polaroid gallery. Editorial footer. Descriptions should be sensory (taste, smell, craft).",
     },
     "editorial-magazine": {
-        "when": "blogs, news, publishers, media platforms, writers",
-        "palette": "minimal-slate",
+        "when": "blogs, news, publishers, media platforms, writers, magazines, food & culture journalism",
+        "palette": "editorial-cream",
         "fonts": "editorial-luxury",
         "animation": "slide-left",
         "styles": {"hero": 4, "about": 7, "gallery": 12, "blog": 6, "testimonials": 4, "footer": 5},
