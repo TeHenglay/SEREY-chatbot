@@ -644,8 +644,11 @@ Text quality is half the design. For every section you write:
   - HERO title: 2-5 words, evocative and specific. BANNED: "Welcome to ...", "Home of ...",
     the brand name alone, or any generic greeting. Good: "Coffee, Roasted Honestly" not "Welcome to Brew Haven".
   - HERO subtitle: one concrete value promise, 6-14 words, mentions what the visitor actually gets.
-  - Descriptions: 1-3 sentences, specific to THIS brand (use details from the user's message and
-    page context). Write like a human copywriter: concrete nouns, active voice, sensory where fitting.
+  - HERO description: keep it SHORT — one sentence, max ~20 words, or leave "" entirely. The subtitle
+    already carries the promise, so the hero must NOT also have a long paragraph. Never start it with
+    "Welcome to ...". Put the fuller story in the ABOUT section, not the hero.
+  - Descriptions (non-hero): 1-3 sentences, specific to THIS brand (use details from the user's message
+    and page context). Write like a human copywriter: concrete nouns, active voice, sensory where fitting.
   - BANNED WORDS everywhere: "elevate", "unleash", "seamless", "cutting-edge", "world-class",
     "passionate about", "look no further", "unlock", "empower". These scream AI-generated.
   - GALLERY product items: real product names (not "Product 1"), each description names a concrete
