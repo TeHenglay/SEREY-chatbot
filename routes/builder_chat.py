@@ -139,7 +139,11 @@ def _is_full_undo(message: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _IMAGE_WORD_RE = re.compile(
-    r"\b(image|images|img|photo|photos|picture|pictures|pic|pics|logo|thumbnail|gallery|រូបភាព|រូប)\b",
+    r"\b(image|images|img|photo|photos|picture|pictures|pic|pics|logo|thumbnail|gallery"
+    # Naming/describing a product or item is inherently grounded in its photo —
+    # look at the uploaded product images so the AI names them from the pixels,
+    # never from imagination (rule 16 forbids guessing product names).
+    r"|product|products|item|items|រូបភាព|រូប)\b",
     re.IGNORECASE,
 )
 _URL_RE = re.compile(r"https?://[^\s\"'<>\)\]]+", re.IGNORECASE)
@@ -818,10 +822,12 @@ OR when just answering a question (no layout change):
     additional instance uses a DOUBLE underscore suffix: "faq__2", "faq__3". Never use "{{name}}_1".
     When page_context lists an existing instance_key (e.g. "team__2"), reuse that EXACT key in
     patches — never rename it. Hero and Footer are always singletons: "hero" and "footer".
-11. GALLERY subtype: set section_subtype="product" when showcasing products/services/features
-    (items need real name + description); "gallery" for a plain photo grid; "project" for portfolio
-    project cards. IMPORTANT: with section_subtype="product" the ONLY valid styles are 1-5
-    (product-card layouts) — the photo styles (6-12, 99) do not exist for product cards.
+11. GALLERY subtype: ALWAYS set section_subtype on every type-3 section (blueprint or patch) —
+    "product" when showcasing products/services/features (items need real name + description),
+    "gallery" for a plain photo grid, "project" for portfolio project cards. With
+    section_subtype="product" the ONLY valid styles are 1-5 (product-card layouts); the photo
+    styles (6-12, 99) do not exist for product cards. In your reply, call a "product" section a
+    "product section", not a "Gallery".
 12. SUBSCRIPTION: use type 13 for email signup. Leave newsletter_provider, kit_embed_script and
     email_octopus_embed_script as "" unless the user pastes an embed script — never invent them.
 13. DESIGN PASS: when the user asks vaguely to improve the look ("make it look better", "more
