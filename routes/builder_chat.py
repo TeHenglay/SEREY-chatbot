@@ -157,6 +157,36 @@ _NON_IMAGE_HOST_RE = re.compile(
 )
 _MAX_VISION_IMAGES = 6
 
+# Freshly-uploaded images arrive in the user's MESSAGE (guided onboarding intake:
+# "[image: <url>]" product markers, "Banner images:"/"Additional images:"/"Logo:"
+# URLs), not in page_context. Pull those so vision can see what was uploaded.
+_BRACKET_IMAGE_RE = re.compile(
+    r"\[image:\s*(https?://[^\s\"'<>\)\]]+?)\s*\]", re.IGNORECASE
+)
+_IMAGE_EXT_RE = re.compile(
+    r"\.(?:jpg|jpeg|png|gif|webp|avif|bmp|svg)(?:\?[^\s\"'<>\)\]]*)?$", re.IGNORECASE
+)
+_USER_UPLOAD_HOST = "upload.serey.io"
+
+
+def _extract_message_image_urls(message: str | None) -> list[str]:
+    if not message:
+        return []
+    urls: list[str] = []
+
+    def _add(url: str) -> None:
+        url = url.rstrip(".,;")
+        if url and url not in urls and not _NON_IMAGE_HOST_RE.search(url):
+            urls.append(url)
+
+    for url in _BRACKET_IMAGE_RE.findall(message):
+        _add(url)
+    for url in _URL_RE.findall(message):
+        stripped = url.rstrip(".,;")
+        if _IMAGE_EXT_RE.search(stripped) or _USER_UPLOAD_HOST in stripped:
+            _add(url)
+    return urls
+
 
 def _extract_image_urls(page_context: str | None) -> list[str]:
     if not page_context:
@@ -179,9 +209,17 @@ def _extract_image_urls(page_context: str | None) -> list[str]:
 async def _vision_context(message: str, page_context: str | None) -> str:
     """Returns a prompt block describing what the page's images actually show,
     or '' when the message isn't about images / there are no image URLs."""
-    if not message or not _IMAGE_WORD_RE.search(message):
+    msg_urls = _extract_message_image_urls(message)
+    # Run vision when the user is talking about images OR just uploaded some in
+    # the message (onboarding intake) — the freshly-uploaded photos are the ones
+    # the copy must match, so they take priority over page_context images.
+    if not msg_urls and (not message or not _IMAGE_WORD_RE.search(message)):
         return ""
-    urls = _extract_image_urls(page_context)
+    urls = list(msg_urls)
+    for url in _extract_image_urls(page_context):
+        if url not in urls:
+            urls.append(url)
+    urls = urls[:_MAX_VISION_IMAGES]
     if not urls:
         return ""
     numbered = "\n".join(f"Image {i}: {u}" for i, u in enumerate(urls, start=1))
