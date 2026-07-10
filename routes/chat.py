@@ -12,6 +12,7 @@ import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
+from services.security import require_serey_origin
 
 from schemas.chat import ChatLink, ChatRequest, ChatResponse
 from services import grok, memory, search
@@ -240,7 +241,7 @@ Rules for the LINKS block:
 """
 
 
-@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(_verify_api_key)])
+@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_serey_origin), Depends(_verify_api_key)])
 async def chat(request: ChatRequest):
     logger.info("Model: %s | user=%s session=%s flow=%s", grok.CHAT_MODEL, request.user_id, request.session_id, request.flow or "none")
     cache_key = _cache_key(request.message, request.flow)
@@ -372,7 +373,7 @@ def _persist_turn(
 # POST /chat/stream — SSE streaming endpoint
 # ---------------------------------------------------------------------------
 
-@router.post("/chat/stream", dependencies=[Depends(_verify_api_key)])
+@router.post("/chat/stream", dependencies=[Depends(require_serey_origin), Depends(_verify_api_key)])
 async def chat_stream(request: ChatRequest, background_tasks: BackgroundTasks):
     logger.info("Model: %s | user=%s session=%s flow=%s", grok.CHAT_MODEL, request.user_id, request.session_id, request.flow or "none")
     """

@@ -3,12 +3,13 @@
 # to POST to /api/v2/landing-pages.
 
 import asyncio
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from schemas.requests import BuilderRequest
 from schemas.blueprint import PageBlueprint
 from services import grok, memory
 from services import design_guidelines as design
 from services import section_catalog as catalog
+from services.security import require_serey_origin, verify_api_key
 import json
 import logging
 
@@ -69,7 +70,11 @@ Set "font" to the pairing's body font; put the title font in hero text_styles {{
 """
 
 
-@router.post("/generate-blueprint", response_model=PageBlueprint)
+@router.post(
+    "/generate-blueprint",
+    response_model=PageBlueprint,
+    dependencies=[Depends(require_serey_origin), Depends(verify_api_key)],
+)
 async def generate_blueprint(request: BuilderRequest):
     # 1. Retrieve memories
     long_term_memory = memory.get_user_preferences(request.user_id, request.prompt)

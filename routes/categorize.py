@@ -10,8 +10,10 @@ import redis.asyncio as aioredis
 from google import genai
 from google.genai import types
 import httpx
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
+
+from services.security import require_serey_origin, verify_api_key
 
 _gemini_client = None
 
@@ -143,7 +145,10 @@ def _pick_category(categories: list[dict], cat_id) -> dict | None:
     return next((c for c in categories if c.get("id") == target), None)
 
 
-@router.post("/categorize-post")
+@router.post(
+    "/categorize-post",
+    dependencies=[Depends(require_serey_origin), Depends(verify_api_key)],
+)
 async def categorize_post(
     request: CategorizeRequest,
     authorization: str = Header(default=""),

@@ -6,6 +6,7 @@
 import asyncio
 from copy import deepcopy
 from fastapi import APIRouter, HTTPException, Header, Depends
+from services.security import require_serey_origin
 from schemas.chat import ChatRequest, BuilderChatResponse, UploadNeeded
 from schemas.blueprint import PageBlueprint, PatchCommand
 from services import grok
@@ -899,7 +900,7 @@ OR when just answering a question (no layout change):
 BUILDER_SYSTEM_PROMPT = _build_system_prompt()
 
 
-@router.post("/builder/chat", response_model=BuilderChatResponse, dependencies=[Depends(_verify_api_key)])
+@router.post("/builder/chat", response_model=BuilderChatResponse, dependencies=[Depends(require_serey_origin), Depends(_verify_api_key)])
 async def builder_chat(request: ChatRequest):
     logger.info("Model: %s | user=%s session=%s community=%s", grok.BUILDER_MODEL, request.user_id, request.session_id, request.community_id)
 

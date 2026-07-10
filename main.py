@@ -74,7 +74,19 @@ async def lifespan(application: FastAPI):
     logger.info("Scheduler stopped.")
 
 
-app = FastAPI(title="AI Website Builder API", lifespan=lifespan)
+# Interactive docs (/docs, /redoc) and the OpenAPI schema (/openapi.json) leak
+# the full internal API surface, so they are OFF by default and must be opted
+# into explicitly — set ENABLE_DOCS=true in local/dev .env, leave it unset in
+# production.
+_DOCS_ENABLED = os.getenv("ENABLE_DOCS", "false").strip().lower() in ("1", "true", "yes")
+
+app = FastAPI(
+    title="AI Website Builder API",
+    lifespan=lifespan,
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
 
 _ALLOWED_ORIGINS = [
     o.strip()
@@ -86,9 +98,15 @@ _ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
+# Browser CORS layer: explicit dev/staging origins from CORS_ORIGINS, plus
+# serey.io and any *.serey.io subdomain via regex. NOTE: CORS only constrains
+# browsers — raw curl / server-to-server callers send no Origin and bypass it,
+# so the real gate is the X-Serey-Api-Key check (services.security.verify_api_key)
+# applied on every AI route. See services/security.py.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
+    allow_origin_regex=r"https?://([a-z0-9-]+\.)*serey\.io(:\d+)?",
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],

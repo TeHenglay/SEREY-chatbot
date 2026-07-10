@@ -10,6 +10,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 from routes.builder_chat import _verify_api_key
+from services.security import require_serey_origin
 from schemas.requests import MatchProductsRequest, MatchProductsResponse, ProductMatch
 from services import grok
 
@@ -59,7 +60,7 @@ def _build_prompt(request: MatchProductsRequest) -> str:
 @router.post(
     "/builder/match-products",
     response_model=MatchProductsResponse,
-    dependencies=[Depends(_verify_api_key)],
+    dependencies=[Depends(require_serey_origin), Depends(_verify_api_key)],
 )
 async def match_products(request: MatchProductsRequest):
     logger.info(
