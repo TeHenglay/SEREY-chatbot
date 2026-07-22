@@ -231,6 +231,7 @@ SEREY_KNOWLEDGE = [
             "/term-of-service — Terms of service. "
             "/rules-and-values — Rules and values. "
             "/security-disclosure-program — Security disclosure program. "
+            "/report-bug — Report a bug or broken feature. "
             "/platform-plan-terms — Platform plan terms. "
             "/bookmebus — Book bus, ferry, and train tickets across Cambodia and Southeast Asia. "
             "/cambodian-citizenship-by-investment — Overview and application for the Cambodian Citizenship by Investment program. "
@@ -273,7 +274,22 @@ SEREY_KNOWLEDGE = [
             "Users can get help from Serey through the following channels: "
             "FAQ page at /faq. "
             "Email: contact@serey.io. "
-            "Telegram: @sereyio"
+            "Telegram: @sereyio. "
+            "Found a bug or broken feature? Report it at /report-bug."
+        ),
+    },
+    {
+        "id": "serey_report_bug",
+        "category": "support",
+        "title": "Report a Bug on Serey",
+        "content": (
+            "Users who find a bug, error, glitch, or broken feature on Serey can report it on the Report Bug page at /report-bug. "
+            "Steps to report a bug: 1. Go to /report-bug. "
+            "2. Fill in the bug report form describing the problem and submit it. "
+            "The Serey team reviews submitted reports to fix issues and improve the platform. "
+            "Note: for security vulnerabilities (not regular bugs), use the Security Disclosure Program at /security-disclosure-program instead. "
+            "For general help or other questions, see the FAQ at /faq or contact contact@serey.io. "
+            "Route: /report-bug"
         ),
     },
     {
@@ -751,7 +767,12 @@ CONTEXTUAL_PREFIXES: dict[str, str] = {
     "serey_support": (
         "This chunk explains how to contact Serey and get help: the support email address "
         "(contact@serey.io), what is your email, how do I reach you, the Telegram channel (@sereyio), "
-        "and the FAQ help page for customer support."
+        "the FAQ help page for customer support, and where to report a bug (/report-bug)."
+    ),
+    "serey_report_bug": (
+        "This chunk explains how to report a bug, error, glitch, or broken feature on Serey: "
+        "I found a bug, something is broken, the page is not working, how do I report a problem or "
+        "issue, where do I submit a bug report. The Report Bug page is at /report-bug."
     ),
     "serey_founder": (
         "This chunk answers who founded, created, started, or is behind Serey: the founder of Serey "
