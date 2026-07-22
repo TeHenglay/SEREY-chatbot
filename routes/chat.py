@@ -227,6 +227,7 @@ block at the VERY END of your response — after all your main text:
 
 Rules for the LINKS block:
 - ALWAYS include it when you mention any community by name — even in general (non-discovery) answers.
+- EVERY Serey page you mention by name in the reply text (e.g. Report Bug page, FAQ page, Security Disclosure Program) MUST have its own entry in the ##LINKS## block — never mention a page without giving its button. List the primary destination first.
 - For communities: type = "community", community_id = real integer ID from knowledge, url = "".
 - For pages: type = "page", url = the EXACT route path from knowledge (e.g. "/feed", "/blog/post/new", "/sereymarket"). NEVER leave url empty for pages.
 - For shops: type = "shop", url = the shop link from knowledge (e.g. "/sereymarket?shop_id=123"). When listing multiple shops: include ONE ##LINKS## entry per shop, then add the general marketplace link last.
