@@ -77,13 +77,29 @@ SEREY_KNOWLEDGE = [
         "content": (
             "To open a shop on Serey, you must first ensure your platform has a subscription plan that includes the shop/marketplace feature. "
             "Without an eligible subscription plan, the option to open a shop will not be available. "
-            "To buy or upgrade a community subscription plan, visit /social-media-owners (labelled 'Buy a Plan'). "
+            "To buy or upgrade a subscription plan, open 'Manage Your Platform' from the top menu, choose the plan that fits you, and click 'Get Started' (route /social-media-owners). "
             "Once you have an eligible plan, follow these steps: "
             "1. Complete your payment setup at /sereymarket/payment-setup. "
             "2. Fill in your shop name, category, and contact info. "
             "3. Upload your first product listing with photos and a price at /sereymarket/myproduct. "
             "4. Your shop goes live immediately after review. "
             "Sellers can manage orders at /sereymarket/myorder."
+        ),
+    },
+    {
+        "id": "serey_buy_plan",
+        "category": "plans",
+        "title": "How to Buy a Serey Plan (Subscription)",
+        "content": (
+            "To buy a Serey subscription plan for your platform, follow these steps: "
+            "1. Open 'Manage Your Platform' from the top menu. "
+            "2. Choose the plan that fits you from the plans shown. "
+            "3. Click 'Get Started' on that plan. "
+            "4. Complete checkout. Serey supports Stripe, Visa, Mastercard, USDT, USDC, and Bakong KHQR. "
+            "The plan you pick unlocks features such as the online shop, podcast, video channel, and community tools. "
+            "You can upgrade or change your plan later from the same place. "
+            "Watch the video tutorial: https://storage.serey.io/videos/01KY9E2T3GDM77W1C9XJNTCF5J.mp4 "
+            "Route: /social-media-owners"
         ),
     },
     {
@@ -772,6 +788,12 @@ CONTEXTUAL_PREFIXES: dict[str, str] = {
         "premium content subscriptions, tips, paid communities, digital products, sponsorships), "
         "Serey's fees and commission (8.5% on premium content vs Substack's 10%, only 1.2% on shop "
         "sales, no hidden fees), and selling physical and digital products."
+    ),
+    "serey_buy_plan": (
+        "This chunk explains how to buy, purchase, get, or upgrade a Serey subscription plan for your "
+        "platform: open Manage Your Platform from the top menu, choose the plan that fits you, and click "
+        "Get Started, then complete checkout. How do I buy a plan, how to get a Serey plan, where do I "
+        "subscribe, how much does a plan cost, upgrade my subscription."
     ),
     "serey_tutorials": (
         "This chunk lists Serey's video tutorials and how to guides on the /tutorials page: how to buy "
