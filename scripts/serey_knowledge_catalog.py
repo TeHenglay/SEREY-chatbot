@@ -97,7 +97,6 @@ SEREY_KNOWLEDGE = [
             "3. Click 'Get Started' on that plan. "
             "4. Complete checkout. Serey supports Stripe, Visa, Mastercard, USDT, USDC, and Bakong KHQR. "
             "The plan you pick unlocks features such as the online shop, podcast, video channel, and community tools. "
-            "You can upgrade or change your plan later from the same place. "
             "Watch the video tutorial: https://storage.serey.io/videos/01KY9E2T3GDM77W1C9XJNTCF5J.mp4 "
             "Route: /social-media-owners"
         ),
