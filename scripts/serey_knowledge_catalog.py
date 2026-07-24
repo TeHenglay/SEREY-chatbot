@@ -706,6 +706,33 @@ SEREY_KNOWLEDGE = [
             "Route: /rules-and-values"
         ),
     },
+    {
+        "id": "serey_tutorials",
+        "category": "tutorials",
+        "title": "Serey Tutorials (Video Guides)",
+        "content": (
+            "Serey Tutorials is a video guide page that teaches new users how to use the Serey platform "
+            "through short, step by step walkthroughs. Several videos include Khmer language narration or subtitles. "
+            "The page is at /tutorials and is linked from the site footer under Resources. "
+            "The tutorials are grouped into three sections.\n\n"
+            "Get Started:\n"
+            "1. Buy a Serey Plan. Pick the plan that fits you and check out. Includes Khmer subtitles. "
+            "Video: https://storage.serey.io/videos/01KY9E2T3GDM77W1C9XJNTCF5J.mp4\n"
+            "2. Set Up Your Serey Link. Build your link in bio so everything sits behind one Serey link. "
+            "Video: https://storage.serey.io/videos/01KY9E4N3Q7E5671BEKXBSNF6T.mp4\n\n"
+            "Publishing:\n"
+            "3. Publish a Blog Post. Publish your first article, from blank draft to live post. "
+            "Video: https://storage.serey.io/videos/01KY9E1KDQJ1Z8XYYXSF6HQ32A.mp4\n"
+            "4. Post a Podcast. Upload an episode, add details, and publish it to your channel. "
+            "Video: https://storage.serey.io/videos/01KY9E35R59CBNFAZ00JEEEH45.mp4\n\n"
+            "Grow & Connect:\n"
+            "5. Invite Friends & Earn. Share your referral link and earn rewards for every signup. "
+            "Video: https://storage.serey.io/videos/01KY9E437A9SZTXA90C4BSNPKQ.mp4\n"
+            "6. Add a Group Chat. Turn on group chat so your community can talk in real time. "
+            "Video: https://storage.serey.io/videos/01KY9E5BBXVVRY2B3MJNJZHX24.mp4\n\n"
+            "Route: /tutorials"
+        ),
+    },
     # -----------------------------------------------------------------------
     # Add more knowledge entries here as Serey grows.
     # Follow the same structure: id, category, title, content.
@@ -745,6 +772,12 @@ CONTEXTUAL_PREFIXES: dict[str, str] = {
         "premium content subscriptions, tips, paid communities, digital products, sponsorships), "
         "Serey's fees and commission (8.5% on premium content vs Substack's 10%, only 1.2% on shop "
         "sales, no hidden fees), and selling physical and digital products."
+    ),
+    "serey_tutorials": (
+        "This chunk lists Serey's video tutorials and how to guides on the /tutorials page: how to buy "
+        "a Serey plan, how to set up your Serey Link (link in bio), how to publish a blog post, how to "
+        "post a podcast, how to invite friends and earn referral rewards, and how to add a group chat. "
+        "Where can I learn to use Serey, watch tutorials, video guides, how do I get started, show me a video."
     ),
     "serey_routes_social": (
         "Routes and pages for Serey's social features: watching and uploading videos (video-component), "
