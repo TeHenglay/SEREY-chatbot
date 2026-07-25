@@ -604,9 +604,10 @@ def transform_subscription_plans(data) -> dict:
     if not isinstance(items, list):
         items = []
 
-    # Collect per plan_type: components (once) + prices per region+duration_type
+    # Collect per plan_type: components (once) + international prices per duration_type.
+    # Cambodia-region rows are intentionally skipped — the chatbot quotes international pricing only.
     from collections import defaultdict
-    plans: dict = defaultdict(lambda: {"components": [], "cambodia": {}, "international": {}})
+    plans: dict = defaultdict(lambda: {"components": [], "prices": {}})
 
     for p in items:
         if not isinstance(p, dict):
@@ -615,6 +616,8 @@ def transform_subscription_plans(data) -> dict:
         if not plan_type:
             continue
         region = (p.get("region") or "").lower()
+        if region == "cambodia":
+            continue
         duration_type = (p.get("duration_type") or "").lower()
         price = p.get("price", "")
         components = p.get("allowed_components") or []
@@ -623,11 +626,10 @@ def transform_subscription_plans(data) -> dict:
         if components and not bucket["components"]:
             bucket["components"] = components
 
-        region_key = "cambodia" if region == "cambodia" else "international"
         if duration_type in ("month", "monthly"):
-            bucket[region_key]["monthly"] = price
+            bucket["prices"]["monthly"] = price
         elif duration_type in ("year", "yearly", "annual", "annually"):
-            bucket[region_key]["yearly"] = price
+            bucket["prices"]["yearly"] = price
 
     if not plans:
         return {"title": "Serey Subscription Plans", "content": "Serey subscription plans data unavailable."}
@@ -641,19 +643,19 @@ def transform_subscription_plans(data) -> dict:
         display = _DISPLAY_NAMES.get(pt, pt.replace("_", " ").title())
         comp_str = f" (includes: {', '.join(info['components'])})" if info["components"] else ""
 
+        r = info["prices"]
         pricing_parts = []
-        for region_label, region_key in [("Cambodia", "cambodia"), ("International", "international")]:
-            r = info[region_key]
-            if r.get("yearly"):
-                pricing_parts.append(f"{region_label}: ${r['yearly']}/yr")
-            elif r.get("monthly"):
-                pricing_parts.append(f"{region_label}: ${r['monthly']}/mo")
+        if r.get("yearly"):
+            pricing_parts.append(f"${r['yearly']}/yr")
+        if r.get("monthly"):
+            pricing_parts.append(f"${r['monthly']}/mo")
 
         price_str = ", ".join(pricing_parts)
         lines.append(f"{display}{comp_str} — {price_str}" if price_str else f"{display}{comp_str}")
 
     content = (
-        "Serey offers 6 subscription plans. Visit /social-media-owners to purchase. "
+        f"Serey offers {len(ordered)} subscription plans. Prices are in USD. "
+        "Visit /social-media-owners to purchase. "
         + " | ".join(lines)
         + "."
     )
