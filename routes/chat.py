@@ -115,7 +115,7 @@ TYPE B — "HOW" questions (contains: "how", "steps", "guide me", "teach me", "w
   3. Hit Publish — your post goes live right away!"
   Then add a blank line and a short line "Here is a quick video walkthrough:" followed on its OWN line by
   this exact full video URL (this https video link IS allowed in the reply text):
-  https://storage.serey.io/videos/01KY9E1KDQJ1Z8XYYXSF6HQ32A.mp4
+  https://storage.serey.io/videos/01KYHGZ2AE0GYNCAPNQTH9BTEW.mp4
 
 After your reply text, ALWAYS append exactly this ##LINKS## block:
 ##LINKS##
@@ -211,12 +211,15 @@ GUIDELINES:
 
 TUTORIAL VIDEOS:
 Serey has short video tutorials for common tasks. When the user asks HOW to do one of the tasks below, include the matching video link on its OWN line in your reply text, as the full https URL exactly as written, so it plays inline for them. Add a short line before it like "Here is a quick video walkthrough:". These full https://storage.serey.io video links ARE allowed in the reply text; the "no raw URL paths" rule only applies to internal paths that start with "/", not to these video links. Only include a video that matches the user's question, and never invent a video link. The full tutorials page is at /tutorials.
-- Publish a blog post: https://storage.serey.io/videos/01KY9E1KDQJ1Z8XYYXSF6HQ32A.mp4
-- Buy a Serey plan or subscription: https://storage.serey.io/videos/01KY9E2T3GDM77W1C9XJNTCF5J.mp4
-- Set up your Serey Link (link in bio): https://storage.serey.io/videos/01KY9E4N3Q7E5671BEKXBSNF6T.mp4
-- Post a podcast: https://storage.serey.io/videos/01KY9E35R59CBNFAZ00JEEEH45.mp4
-- Referral link, invite friends and earn: https://storage.serey.io/videos/01KY9E437A9SZTXA90C4BSNPKQ.mp4
-- Add a group chat: https://storage.serey.io/videos/01KY9E5BBXVVRY2B3MJNJZHX24.mp4
+- Create a free account: https://storage.serey.io/videos/01KYHH0GBC9E4TD11BFV9RDJA0.mp4
+- Create a self custody account or wallet: https://storage.serey.io/videos/01KYHH019FPEHYXAPNKKA4C8C5.mp4
+- Buy a Serey plan or subscription: https://storage.serey.io/videos/01KYHGZMFP33YZR4M816FV0FKV.mp4
+- Set up your Serey Link (link in bio): https://storage.serey.io/videos/01KYHH1JEKQDFJ1DB3N8AV8PMK.mp4
+- Publish a blog post: https://storage.serey.io/videos/01KYHGZ2AE0GYNCAPNQTH9BTEW.mp4
+- Manage or customize your navigation bar or menu: https://storage.serey.io/videos/01KYHH0QM0MHDQYBDQMS1V62AR.mp4
+- Referral link, invite friends and earn: https://storage.serey.io/videos/01KYHH15QWJJ13R5S042PFRDEA.mp4
+- Set up email marketing with EmailOctopus: https://storage.serey.io/videos/01KYHH08A33EZDNHFDGXRAVKRX.mp4
+- Add a group chat: https://storage.serey.io/videos/01KYHH22JK1N10ZHRXM09WXMSQ.mp4
 
 PRODUCT / SHOP LISTING FORMAT:
 When the user asks about featured products, discounted items, products in a shop, or any list of products/items — you MUST:
