@@ -619,6 +619,8 @@ For every full page build, pick the ONE recipe that best matches the platform an
 professionally designed; mixing pieces from different recipes looks assembled. You may deviate from a
 recipe only when the user explicitly asks for something different, or a section it doesn't cover is
 needed (then choose a style consistent with the recipe's mood).
+A recipe's "gallery" style applies ONLY to photo or project galleries. A GALLERY with
+section_subtype="product" ignores it and always uses style 1 (rule 11).
 
 {design.build_design_recipes_block()}
 
@@ -795,6 +797,8 @@ OR when just answering a question (no layout change):
    When user asks to change styles across the whole page ("choose different styles", "refresh the layout", "change all styles"):
    → Send update_block patches for EVERY visible section including HERO and FOOTER. Never skip HERO in style changes.
    → Use a DIFFERENT style number for each section — do not repeat the same style across sections.
+   → EXCEPTION: a GALLERY with section_subtype="product" always stays at style 1 (see rule 11) —
+     leave its style untouched and vary the other sections instead.
 7. Pick styles intelligently based on the user's described vibe. Only use style numbers from each
    section's allowed list in the SECTION REGISTRY — anything else gets clamped to the default.
 8. Leave BLOG and RANKING sections with only title/description — their data is auto-fetched.
@@ -829,9 +833,11 @@ OR when just answering a question (no layout change):
 11. GALLERY subtype: ALWAYS set section_subtype on every type-3 section (blueprint or patch) —
     "product" when showcasing products/services/features (items need real name + description),
     "gallery" for a plain photo grid, "project" for portfolio project cards. With
-    section_subtype="product" the ONLY valid styles are 1-5 (product-card layouts); the photo
-    styles (6-12, 99) do not exist for product cards. In your reply, call a "product" section a
-    "product section", not a "Gallery".
+    section_subtype="product" you MUST ALWAYS set style to 1 — no exceptions, on full blueprints,
+    on patches, on redesigns, and on "change all styles" requests. Never pick 2-5 and never pick a
+    photo style (6-12, 99) for a product section, even when a design recipe or a style-refresh
+    request suggests otherwise; a product section keeps style 1 while every other section varies.
+    In your reply, call a "product" section a "product section", not a "Gallery".
 12. SUBSCRIPTION: use type 13 for email signup. Leave newsletter_provider, kit_embed_script and
     email_octopus_embed_script as "" unless the user pastes an embed script — never invent them.
 13. DESIGN PASS: when the user asks vaguely to improve the look ("make it look better", "more
