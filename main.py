@@ -16,6 +16,7 @@ from routes.chat import router as chat_router
 from routes.builder_chat import router as builder_chat_router
 from routes.categorize import router as categorize_router
 from routes.product_match import router as product_match_router
+from routes.summarize import router as summarize_router
 from services.knowledge_sync import sync_knowledge
 import logging
 import os
@@ -117,6 +118,7 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(builder_chat_router, prefix="/api")
 app.include_router(categorize_router, prefix="/api")
 app.include_router(product_match_router, prefix="/api")
+app.include_router(summarize_router, prefix="/api")
 
 
 @app.get("/health")
