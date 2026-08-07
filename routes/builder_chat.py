@@ -560,10 +560,20 @@ Use text_styles sparingly — only when the user asks for typography changes or 
 
 {catalog.build_style_descriptions_block()}
 
-STYLE 99 — BACKGROUND IMAGE VARIANT:
-  Every section supports style 99: content rendered over a full-width background image (bg_image_url + bg_image_opacity).
-  Only choose style 99 when the user asks for a background-image look OR page_context shows an already-uploaded bg_image_url for that section.
-  With style 99, still set bg_image_url per the image rules (copy uploaded URL or leave "") and pick a dark overlay-friendly palette with light text.
+BACKGROUND IMAGES:
+  Any section on ANY style can sit over a full-width background image — set bg_image_url + bg_image_opacity, there is no separate
+  "background image" style number. Only do this when the user asks for a background-image look OR page_context shows an
+  already-uploaded bg_image_url for that section; then pick a dark overlay-friendly palette with light text for that section.
+
+== LAYOUT STYLE PREFERENCE WEIGHTS ==
+When you CHOOSE or randomize a section's layout style, prefer styles by weight:
+  High   — default/first choice, use most often.
+  Medium — acceptable alternative, use occasionally for variety.
+  Low    — only when the user explicitly asks for it, or as a last resort.
+These weights break ties between styles that would both work; an explicit user request always wins, and a design
+recipe's style for a section wins over the weights (the recipes are already built from High/Medium choices).
+
+{catalog.build_style_weights_block()}
 
 == FRONTEND STARTER TEMPLATES ==
 The frontend offers 4 starter templates. Their exact structures:
@@ -600,7 +610,7 @@ Map the labeled intake fields to the blueprint like this:
     descriptions (polish grammar only), and copy each [image: ...] URL into that item's image_url.
     Never invent extra products and never drop a listed one.
   - "Contact information:" → footer contact fields. "Logo: <url>" → footer logo_url.
-  - "Banner images:" URLs → hero image_url (or bg_image_url when using style 99).
+  - "Banner images:" URLs → hero image_url (or bg_image_url for a background-image look).
   - "Additional images:" URLs → distribute across image slots the chosen styles actually render
     (about, custom, gallery, team...) — use every provided image somewhere sensible if possible.
   - "Additional section content provided by user:" labeled lines map to their sections:
@@ -633,7 +643,7 @@ These separate a 10x page from a template — apply them to every full build:
   3. DENSITY CONTRAST: after a dense section (grid gallery, team grid, FAQ) place a spacious one
      (text-only about, big quote testimonial, custom banner). Never stack two dense grids.
   4. ONE ACCENT MOMENT: exactly one section mid-page may use the accent color as a large fill
-     (custom style 4 banner, about style 5 panel, or subscription style 7 bar) — this is the page's
+     (custom style 4 banner, about style 1 panel, or subscription style 3 split panel) — this is the page's
      call-to-action moment. More than one large accent fill cheapens it.
   5. IMAGE SHAPES: pick ONE image_shape and use it consistently — 'arch' for artisan/organic,
      'circle' for people/community, 'rounded' for tech/premium, 'blob' for playful, square/default
@@ -665,16 +675,13 @@ Text quality is half the design. For every section you write:
     with a Khmer-capable font from the list).
 
 HERO STYLE VARIETY — CRITICAL:
-  Do NOT default to Hero style 2 (Cinematic) for every page. It is ONLY appropriate for:
-  Photography portfolios, high-budget events, fashion/luxury brands.
-  For most platforms, prefer these instead:
-    Hero 1 (Split)        — e-commerce, products, SaaS, professional services, shops
+  All five hero styles carry equal weight — do NOT default to the same one on every page. Match the platform:
+    Hero 1 (Backdrop)     — e-commerce, products, SaaS, professional services, shops, photography, events
     Hero 4 (Magazine)     — blogs, media, gaming, community, tech
     Hero 5 (Mag Cover)    — editorial, portfolio, creative agencies
-    Hero 3 (Centered)     — education, NGO, charity, wellness, courses
-    Hero 6 (Card Overlay) — premium/dark brands, events
-  Mix hero styles across generations — never repeat style 2 if another style fits equally well.
-  TESTIMONIALS: default to style 7 (Cards No Image) unless the user explicitly requests avatars or a different layout.
+    Hero 3 (Centered)     — education, NGO, charity, wellness, courses (no hero image)
+    Hero 6 (Card Overlay) — premium/dark brands, luxury, nightlife
+  Mix hero styles across generations — never repeat the same style if another one fits equally well.
 
 == SECTION RECOMMENDATIONS BY SITE TYPE ==
   Online Shop:       HERO, ABOUT, GALLERY, TESTIMONIALS, FAQ, FOOTER
@@ -834,9 +841,10 @@ OR when just answering a question (no layout change):
     "product" when showcasing products/services/features (items need real name + description),
     "gallery" for a plain photo grid, "project" for portfolio project cards. With
     section_subtype="product" you MUST ALWAYS set style to 1 — no exceptions, on full blueprints,
-    on patches, on redesigns, and on "change all styles" requests. Never pick 2-5 and never pick a
-    photo style (6-12, 99) for a product section, even when a design recipe or a style-refresh
-    request suggests otherwise; a product section keeps style 1 while every other section varies.
+    on patches, on redesigns, and on "change all styles" requests. Never pick any other product
+    style (2, 4, 5, 6) and never pick a photo-gallery style (2-7) for a product section, even when a
+    design recipe, the style weights, or a style-refresh request suggests otherwise; a product
+    section keeps style 1 while every other section varies.
     In your reply, call a "product" section a "product section", not a "Gallery".
 12. SUBSCRIPTION: use type 13 for email signup. Leave newsletter_provider, kit_embed_script and
     email_octopus_embed_script as "" unless the user pastes an embed script — never invent them.
@@ -846,9 +854,9 @@ OR when just answering a question (no layout change):
     colors from its palette, the font pairing (font fields via hero text_styles), refreshed styles
     per the recipe, and the visual rhythm rules — while keeping all existing text content and
     uploaded images exactly as they are. Also set the recipe's animation_style at top level.
-14. STYLE 99 RESTRAINT: use style 99 for at most ONE section per page, and only when a suitable
-    background image is already uploaded or the user asks for it. Full-bleed backgrounds everywhere
-    look heavy and slow.
+14. BACKGROUND IMAGE RESTRAINT: set bg_image_url on at most ONE section per page, and only when a
+    suitable background image is already uploaded or the user asks for it. Full-bleed backgrounds
+    everywhere look heavy and slow.
 15. UNDO / REVERT: when the user asks to undo or bring back a specific previous value — in ANY
     phrasing: "undo the color change", "put the old title back", "i want the old color theme back",
     "make the hero like before", "give me the previous colors":

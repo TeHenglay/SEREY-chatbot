@@ -42,56 +42,46 @@ STRING_ONLY_SECTION_TYPES: tuple[str, ...] = ("TEXTBLOCK",)
 
 ALL_SECTION_TYPES: tuple[str, ...] = tuple(SECTION_TYPE_ID_MAP.values()) + STRING_ONLY_SECTION_TYPES
 
-# Style 99 = full-bleed "Background Image" variant available on every section.
-BACKGROUND_IMAGE_STYLE = 99
-
 # ---------------------------------------------------------------------------
 # Layout styles per section — value, label, description.
-# Mirrors: LandingBuilderV2.js SECTION_STYLE_OPTIONS (labels/descriptions verbatim).
+# Mirrors: LandingBuilderV2.js SectionLayoutStylePicker (the visual style strip
+# the user actually sees) — that picker, not the legacy SECTION_STYLE_OPTIONS
+# dropdown, is the source of truth for which style numbers exist.
 # Order matches the frontend picker; the FIRST value is the default style.
+# NOTE: the picker labels its chips by POSITION for ABOUT and TESTIMONIALS
+# (chip "1." is not style 1) — always use the `value` here, never the chip number.
+# The old full-bleed "style 99" variant no longer exists: any section can carry
+# a background image via bg_image_url on any style.
 # ---------------------------------------------------------------------------
 
 SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
     "HERO": (
-        (1, "Split", "Text on left, image on right — two-column layout"),
-        (2, "Cinematic", "Full-width dramatic hero with large background image and overlay text"),
+        (1, "Backdrop", "Text on the left over a full-bleed background image, no overlay"),
         (3, "Centered", "Title and description centered on a solid background color, no image"),
         (4, "Magazine", "Editorial-style layout with bold typography and image panel"),
         (5, "Mag Cover", "Magazine cover style with horizontal rules and editorial typography"),
         (6, "Card Overlay", "Padded dark card with image background, overlay gradient, and centered bold text"),
-        (99, "Background Image", "Full-width background image with dramatic overlay and centered bold typography"),
     ),
     "ABOUT": (
-        (1, "Classic", "Text on left, image on right"),
-        (2, "Round L", "Circular image on the left, text on the right"),
-        (3, "Card R", "Image in a card on the right with a floating shadow effect"),
-        (4, "Text L", "Text-only layout aligned to the left, no image"),
-        (5, "Panel", "Colored background panel with text and image side by side"),
-        (6, "Panel T", "Full-width top panel with image above and text below"),
-        (7, "Feature Spread", "Editorial image-left / text-right body layout"),
-        (99, "Background Image", "Full-width background image with centered image thumbnail and text overlay"),
+        (8, "Social", "Image on left, title and description on right with a row of social links below"),
+        (1, "Panel", "Colored left panel with the text beside the image"),
+        (4, "Text Only", "Centered title and description, no image"),
+        (9, "Split Panel", "Two columns: description on a light panel, title on a slightly darker panel"),
     ),
     "GALLERY": (
         (1, "Classic", "Uniform 3-column image grid"),
         (2, "Feature R", "2x2 grid left with a large featured image on the right"),
-        (3, "Masonry", "Masonry column layout with mixed image heights"),
-        (4, "Spotlight", "One hero item on top with a row of smaller items below"),
-        (5, "Strip", "Horizontal strip of images with side-by-side tiles"),
-        (6, "Polaroid", "Polaroid-style photo cards with slight tilt and shadow"),
-        (7, "Cinematic", "Stacked wide images in a cinematic 16:9 feel"),
-        (8, "Triptych", "Three tall equal columns"),
-        (9, "Overlap", "Overlapping card layout with depth and shadow"),
-        (11, "Wall", "Tight no-gap grid with many small cells"),
-        (12, "Photo Essay", "Editorial photo essay layout with rules and captions"),
-        (99, "Background Image", "Gallery grid floating over a dramatic background image overlay"),
+        (3, "Bento", "Two rows of uneven-width mosaic tiles with name captions — auto-slides in groups of 6 when there are more"),
+        (4, "Polaroid", "Polaroid-style photo cards with slight tilt and shadow"),
+        (5, "Coverflow", "Center image large and centered, fading/shrinking out on each side — slides one at a time"),
+        (6, "Slideshow", "Full-width slideshow with arrows, dots, and autoplay"),
+        (7, "Wall", "Tight no-gap grid with many small cells"),
     ),
     "VIDEO": (
-        (1, "Classic", "Standard centered video player with title above"),
-        (2, "Dark", "Dark background section with prominent video embed"),
-        (3, "Split", "Video on one side, text description on the other"),
-        (4, "Cards", "Multiple videos in a card grid layout"),
-        (5, "Showcase", "Large featured video with a highlighted frame"),
-        (99, "Background Image", "Centered video player on a full-bleed background image with overlay"),
+        (1, "Classic", "Title and description above a single centered video player"),
+        (2, "Split", "Text column on one side, video player on the other"),
+        (3, "Showcase", "One large featured video with a sidebar list of the others"),
+        (4, "Film Review", "Editorial film-review layout: rules, eyebrow label, big title, then a row of players"),
     ),
     "VISION": (
         (1, "Cards", "Goal, Vision, Mission each in a separate colored card"),
@@ -100,7 +90,7 @@ SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
         (4, "Steps Dark", "Dark background with numbered step-style layout"),
         (5, "Feature Grid", "Feature-grid with icon tiles and short descriptions"),
         (6, "Split Panel", "Large panel split between goal/vision/mission vertically"),
-        (99, "Background Image", "Goal, Vision, Mission as glass cards over a background image"),
+        (7, "Text Only", "Plain stacked title and description text, no cards or icons"),
     ),
     "BLOG": (
         (1, "Grid", "3-column card grid of blog post previews"),
@@ -109,16 +99,16 @@ SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
         (4, "Minimal", "Text-only list, no thumbnails — clean and fast"),
         (5, "Overlay", "Image cards with text overlaid on a dark gradient"),
         (6, "Editorial", "Newspaper editorial-style with mixed large/small blocks"),
-        (99, "Background Image", "Post cards floating over a full-width background image with dark overlay"),
+        (7, "Mag Front Page", "Front-page layout: one large featured post beside a numbered sidebar list"),
+        (8, "Editorial Strip", "Title and subtitle above a rule, three square images with captions below"),
+        (9, "News Row", 'Title with a "View all news" link, three dated cards with excerpts below'),
     ),
     "TEAM": (
         (1, "Grid", "Uniform grid of member photos with name and role"),
         (2, "Cards", "Cards with photo, name, role, and short bio"),
-        (4, "List", "Horizontal rows — photo left, info right"),
-        (5, "Banner", "Wide banner-style strips for each member"),
-        (6, "Spotlight", "One featured member large, rest in a row"),
-        (7, "Staggered", "Alternating left/right photo-text rows"),
-        (99, "Background Image", "Team member glass cards over a dramatic background image"),
+        (3, "Banner", "Wide banner-style strips for each member"),
+        (5, "Color Card", "Colored card with the photo bleeding to the edges and a name/role tag overlapping the bottom"),
+        (6, "Circle Bio", "Circular photo with name, a colored role badge, and a short bio underneath"),
     ),
     "FAQ": (
         (1, "Accordion", "Classic expand/collapse accordion for each question"),
@@ -127,16 +117,16 @@ SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
         (4, "Left Border", "Each item has a colored left border accent"),
         (5, "Cards", "Each Q&A pair in its own card"),
         (6, "Numbered", "Numbered Q&A list with large question numbers"),
-        (99, "Background Image", "FAQ items as glass cards over a full-width background image"),
+        (7, "Q&A Interview", "Interview-style layout: eyebrow label and title above rule-separated question/answer pairs"),
     ),
     "TESTIMONIALS": (
         (1, "Cards", "Quote cards with avatar, name, and star rating"),
         (7, "Cards (No Image)", "Card-style quotes with name/role and no avatar image"),
-        (3, "Side by Side", "Two testimonials shown side by side"),
-        (4, "Minimal List", "Simple text list of quotes with attribution"),
-        (5, "Left Border", "Quotes with a vertical colored left border"),
-        (6, "Dark", "Dark background section with light text quotes"),
-        (99, "Background Image", "Quote cards with frosted-glass effect over a background image"),
+        (9, "Large Quote", "One large centered quote with the author photo below"),
+        (10, "Pull Quote", "Large italic editorial pull-quote with prev/next navigation and accent-colored dots"),
+        (6, "Bubble", "Speech-bubble quote cards with a tail, avatar and name underneath"),
+        (11, "Star Cards", "Staggered 3-card grid with a star rating, eyebrow label, and bold heading above"),
+        (12, "Split Dark", "Full-width photo on one side, dark panel on the other with stars, quote and name"),
     ),
     "CUSTOM": (
         (1, "Split Right", "Text on left, image on right"),
@@ -145,24 +135,21 @@ SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
         (4, "Banner", "Full-width banner with overlaid text and optional button"),
         (5, "Card", "Content inside a centered card with shadow"),
         (6, "Highlight", "Highlighted accent block with two images and text"),
-        (99, "Background Image", "Centered content and image on a dramatic full-width background image"),
     ),
     "RANKING": (
         (1, "List", "Ranked vertical list with position numbers"),
         (2, "Podium", "Top 3 on a podium, rest in a list below"),
         (3, "Cards", "Author cards in a grid with avatar and stats"),
         (4, "Circles", "Circular avatar bubbles arranged in a row"),
-        (99, "Background Image", "Leaderboard list with glass cards over a background image"),
+        (5, "Leaderboard", "Editorial leaderboard: eyebrow label and title above numbered rows with avatar, name and post count"),
     ),
     "SUBSCRIPTION": (
-        (1, "Centered Card", "Centered bordered card with title, description and form — Path of Change style"),
-        (2, "Side by Side", "Text on the left, email form on the right in a two-column layout"),
-        (3, "Cinematic", "Full-width section with large background, gradient overlay and eyebrow label"),
-        (4, "Split Panel", "Accent-colored left panel with text, white right panel with form"),
-        (5, "Bold Typographic", "Large typography with a decorative accent line above the title"),
-        (6, "Benefits + Form", "Bullet benefit list on the left, subscription form card on the right"),
-        (7, "Compact Bar", "Slim full-width accent-colored bar with inline title and form"),
-        (99, "Background Image", "Centered subscription form on a full-width background image with dark overlay"),
+        (1, "Centered Card", "Centered bordered card with title, description and form"),
+        (2, "Cinematic", "Full-width section with large background, gradient overlay and eyebrow label"),
+        (3, "Split Panel", "Accent-colored left panel with text, white right panel with form"),
+        (4, "Benefits + Form", "Bullet benefit list on the left, subscription form card on the right"),
+        (5, "Checklist + Card", "Equal two-column split: title and a checklist of benefits on the left, a bordered form card on the right"),
+        (6, "Split Image", "Equal two-column split: title, description and form on the left, a full-height photo on the right"),
     ),
     "FOOTER": (
         (1, "Dark Navy", "Dark navy/black background with white text and social icons"),
@@ -170,7 +157,6 @@ SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
         (3, "Columns", "Multi-column footer with contact, socials, and logo"),
         (4, "Gradient Split", "Dark gradient background with logo and socials on left, contact on right, social icons as glowing circles"),
         (5, "Editorial", "Bold top border, brand and socials in a top row, contact chips and copyright in bottom row — clean magazine style"),
-        (99, "Background Image", "Centered footer content over a background image with dark overlay"),
     ),
     # Not in the frontend style picker — single-layout sections.
     "NEWSLETTER": ((1, "Default", "Simple newsletter signup block"),),
@@ -180,6 +166,48 @@ SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
 
 def allowed_styles(section_type: str) -> tuple[int, ...]:
     return tuple(v for v, _label, _desc in SECTION_STYLES.get(section_type, ((1, "", ""),)))
+
+
+def style_label(section_type: str, style: int) -> str:
+    for value, label, _desc in SECTION_STYLES.get(section_type, ()):
+        if value == style:
+            return label
+    return f"Style {style}"
+
+
+# ---------------------------------------------------------------------------
+# Layout style preference weights — which styles the AI should reach for when
+# it picks or randomizes a section's layout. Unlike SECTION_STYLES (a mirror of
+# the frontend) this is a product preference: some layouts simply photograph
+# better on a generated page than others.
+#   high   — default/first choice, use most often
+#   low    — only when the user explicitly asks for it, or as a last resort
+#   medium — everything else, including sections absent from this table
+# ---------------------------------------------------------------------------
+
+STYLE_WEIGHTS: dict[str, dict[str, tuple[int, ...]]] = {
+    "ABOUT":        {"high": (8, 9), "low": (1,)},
+    "TESTIMONIALS": {"high": (1, 9, 10, 6, 11, 12), "low": ()},
+    "FOOTER":       {"high": (2, 5), "low": ()},
+    "GALLERY":      {"high": (1, 2, 3, 4), "low": ()},
+    "VIDEO":        {"high": (1, 2, 3, 4), "low": ()},
+    "VISION":       {"high": (2, 5, 7), "low": ()},
+    "BLOG":         {"high": (1, 2, 3, 4, 5, 6, 7, 8, 9), "low": ()},
+    "TEAM":         {"high": (1, 6), "low": (2, 3)},
+    "FAQ":          {"high": (1, 2, 3, 4, 5, 6, 7), "low": ()},
+    "SUBSCRIPTION": {"high": (2, 4), "low": ()},
+}
+
+
+def style_weight(section_type: str, style: int) -> str:
+    weights = STYLE_WEIGHTS.get(section_type)
+    if not weights:
+        return "medium"
+    if style in weights.get("high", ()):
+        return "high"
+    if style in weights.get("low", ()):
+        return "low"
+    return "medium"
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +221,11 @@ def allowed_styles(section_type: str) -> tuple[int, ...]:
 def _build_rendered_fields() -> dict[str, dict[int, tuple[str, ...]]]:
     rendered: dict[str, dict[int, tuple[str, ...]]] = {}
     scalar_rules: dict[str, dict[str, tuple[int, ...]]] = {
-        # Mirrors IMAGE_FIELD_STYLE_RULES — hero style 3 and all style-99
-        # variants are text/background-only for the scalar image slot.
-        "HERO": {"image_url": (1, 2, 4, 5, 6)},
-        "ABOUT": {"image_url": (1, 2, 3, 5, 7)},
+        # Mirrors IMAGE_FIELD_STYLE_RULES, intersected with the styles that
+        # still exist: hero style 3 (Centered) and about styles 4 (Text Only)
+        # and 9 (Split Panel) are text-only, so they get no scalar image slot.
+        "HERO": {"image_url": (1, 4, 5, 6)},
+        "ABOUT": {"image_url": (1, 8)},
         "CUSTOM": {"image_url": (1, 2, 3, 4, 5, 6), "image_url_2": (6,)},
     }
     array_fields: dict[str, str] = {
@@ -366,10 +395,11 @@ SECTION_FIELD_DOCS: dict[str, str] = {
 # Gallery subtypes the frontend renders (GALLERY_SUBTYPE_LABELS / ProductSection).
 GALLERY_SUBTYPES: tuple[str, ...] = ("gallery", "product", "project")
 
-# GALLERY subtype 'product' renders via ProductSection, which only implements
-# styles 1-5 (any other number falls back to style 1). The photo subtypes
-# ('gallery'/'project') use the full GALLERY style list above.
-PRODUCT_SUBTYPE_STYLES: tuple[int, ...] = (1, 2, 3, 4, 5)
+# GALLERY subtype 'product' renders via ProductSection and has its OWN style
+# picker: 1 Duo, 2 List, 4 Editorial, 5 Shop, 6 Duo (Text Outside). Any other
+# number falls back to style 1. The photo subtypes ('gallery'/'project') use
+# the full GALLERY style list above.
+PRODUCT_SUBTYPE_STYLES: tuple[int, ...] = (1, 2, 4, 5, 6)
 
 # ---------------------------------------------------------------------------
 # Frontend starter templates — mirrors LandingBuilderV2/landingTemplates.js
@@ -384,7 +414,7 @@ FRONTEND_TEMPLATES: dict[str, dict[str, Any]] = {
         "animation": "slide-up",
         "font": "Mulish",
         "sections": (
-            ("HERO", 2, None, False), ("ABOUT", 2, None, False),
+            ("HERO", 1, None, False), ("ABOUT", 8, None, False),
             ("GALLERY", 1, "product", False), ("TESTIMONIALS", 7, None, False),
             ("FAQ", 1, None, False), ("FOOTER", 4, None, False),
         ),
@@ -394,9 +424,9 @@ FRONTEND_TEMPLATES: dict[str, dict[str, Any]] = {
         "animation": "blur",
         "font": "Inter",
         "sections": (
-            ("HERO", 1, None, False), ("ABOUT", 2, None, False),
-            ("GALLERY", 6, "gallery", False), ("TESTIMONIALS", 7, None, False),
-            ("CUSTOM", 3, None, False), ("FOOTER", 2, None, False),
+            ("HERO", 1, None, False), ("ABOUT", 8, None, False),
+            ("GALLERY", 4, "gallery", False), ("TESTIMONIALS", 7, None, False),
+            ("FOOTER", 2, None, False),
         ),
     },
     "portfolio": {
@@ -405,7 +435,7 @@ FRONTEND_TEMPLATES: dict[str, dict[str, Any]] = {
         "font": "Plus Jakarta Sans",
         "sections": (
             ("HERO", 3, None, False), ("ABOUT", 1, None, False),
-            ("GALLERY", 11, "project", False), ("CUSTOM", 2, None, False),
+            ("GALLERY", 7, "project", False),
             ("TESTIMONIALS", 7, None, False), ("FOOTER", 1, None, False),
         ),
     },
@@ -414,9 +444,9 @@ FRONTEND_TEMPLATES: dict[str, dict[str, Any]] = {
         "animation": "slide-left",
         "font": "Lora",
         "sections": (
-            ("HERO", 5, None, False), ("ABOUT", 7, None, False),
+            ("HERO", 5, None, False), ("ABOUT", 4, None, False),
             ("BLOG", 6, None, False), ("VIDEO", 1, None, True),
-            ("GALLERY", 3, "gallery", False), ("TEAM", 4, None, False),
+            ("GALLERY", 3, "gallery", False), ("TEAM", 1, None, False),
             ("RANKING", 1, None, False), ("FOOTER", 5, None, False),
         ),
     },
@@ -440,19 +470,19 @@ def build_templates_block() -> str:
 # styles to avoid). Mirrors the cheat sheet in BUILDER_V2_AI_BACKEND.md.
 TEMPLATE_EXTRA_STYLE_GUIDE: dict[str, dict[str, str]] = {
     "ecommerce": {
-        "use": "bold high-contrast layouts — GALLERY product s5, VISION s2, TEAM s5, FAQ s1, SUBSCRIPTION s7",
-        "avoid": "soft serif/editorial styles (style-7 panels, magazine layouts)",
+        "use": "bold high-contrast layouts — GALLERY product s5, VISION s2, TEAM s5, FAQ s1, SUBSCRIPTION s4",
+        "avoid": "soft serif/editorial styles (magazine and pull-quote layouts)",
     },
     "creator": {
-        "use": "dark modern visual layouts — GALLERY s6/s9, VIDEO s2, VISION s4, SUBSCRIPTION s3",
+        "use": "dark modern visual layouts — GALLERY s5/s6, VIDEO s3, VISION s4, SUBSCRIPTION s2",
         "avoid": "light pastel or plain 3-column text styles",
     },
     "portfolio": {
-        "use": "clean white minimal text-led layouts — ABOUT s5, CUSTOM s2, FAQ s3, VISION s5",
+        "use": "clean white minimal text-led layouts — ABOUT s9, FAQ s3, VISION s5, TESTIMONIALS s9",
         "avoid": "cinematic dark styles and product-card shelves",
     },
     "publisher": {
-        "use": "editorial serif layouts — any style-7 editorial variant, GALLERY s3/s12, TEAM s4, FAQ s2",
+        "use": "editorial layouts — BLOG s6/s7, GALLERY s3, TEAM s1, FAQ s7, VIDEO s4, TESTIMONIALS s10",
         "avoid": "product cards and dark e-commerce styles",
     },
 }
@@ -512,6 +542,29 @@ def build_style_descriptions_block() -> str:
     return "\n\n".join(blocks)
 
 
+def build_style_weights_block() -> str:
+    """Renders STYLE_WEIGHTS as a High/Medium/Low table for the system prompt."""
+    blocks: list[str] = []
+    for name in GENERATABLE_SECTIONS:
+        styles = SECTION_STYLES.get(name)
+        if not styles or name == "TEXTBLOCK":
+            continue
+        buckets: dict[str, list[str]] = {"High": [], "Medium": [], "Low": []}
+        for value, label, _desc in styles:
+            buckets[style_weight(name, value).capitalize()].append(f"{label} ({value})")
+        if not STYLE_WEIGHTS.get(name):
+            blocks.append(f"  {name}: no preference — treat every style as Medium")
+            continue
+        if not buckets["Medium"] and not buckets["Low"]:
+            blocks.append(f"  {name}: High — all styles equally")
+            continue
+        rows = "\n".join(
+            f"      {tier:<7}{', '.join(items)}" for tier, items in buckets.items() if items
+        )
+        blocks.append(f"  {name}:\n{rows}")
+    return "\n".join(blocks)
+
+
 def build_palettes_block() -> str:
     rows = "\n".join(
         f"  {name:<18}: hero_bg={p['hero_bg']}  title={p['title']}  accent={p['accent']}  "
@@ -531,3 +584,19 @@ def build_color_keys_block() -> str:
         for name, keys in SECTION_COLOR_KEYS.items()
         if name in GENERATABLE_SECTIONS
     )
+
+
+def _validate() -> None:
+    """Catch drift between SECTION_STYLES and everything keyed off it."""
+    for section, weights in STYLE_WEIGHTS.items():
+        allowed = set(allowed_styles(section))
+        for tier in ("high", "low"):
+            unknown = set(weights.get(tier, ())) - allowed
+            assert not unknown, f"STYLE_WEIGHTS[{section}].{tier}: unknown styles {sorted(unknown)}"
+    for name, template in FRONTEND_TEMPLATES.items():
+        for section, style, subtype, _hidden in template["sections"]:
+            valid = PRODUCT_SUBTYPE_STYLES if subtype == "product" else allowed_styles(section)
+            assert style in valid, f"FRONTEND_TEMPLATES[{name}]: {section} style {style} not in {sorted(valid)}"
+
+
+_validate()
