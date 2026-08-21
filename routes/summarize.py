@@ -1,6 +1,6 @@
 # "This article in one minute" — 2-4 bullet TL;DR for a blog post, plus a
 # reading-time estimate. Summaries are per-article, not per-reader: the first
-# request pays for Grok, everyone after reads the Redis cache.
+# request pays for the AI call, everyone after reads the Redis cache.
 
 import asyncio
 import json
@@ -14,7 +14,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from services import grok
+from services import gemini_client, grok
 from services.security import require_serey_origin, verify_api_key
 
 router = APIRouter()
@@ -32,6 +32,19 @@ _CACHE_TTL = 15552000  # 180 days
 # for a 30k-character essay.
 _MAX_ARTICLE_CHARS = 8000
 _WORDS_PER_MINUTE = 200
+
+# Which model writes the summary. "gemini" (default) uses gemini-3.1-flash-lite,
+# the same model categorize-post runs on; set SUMMARY_PROVIDER=grok to fall back
+# to grok-4.3. Cache keys are provider-agnostic, so flipping this does NOT
+# invalidate summaries already cached from the other provider.
+_PROVIDER = os.getenv("SUMMARY_PROVIDER", "gemini").strip().lower()
+
+# Gemini schema: forces {"bullets": [...]} so no fence/prose stripping is needed.
+_BULLETS_SCHEMA = {
+    "type": "object",
+    "properties": {"bullets": {"type": "array", "items": {"type": "string"}}},
+    "required": ["bullets"],
+}
 
 # Fallback used ONLY when Redis is down (same rule as categorize.py: when Redis
 # is up it stays the single source of truth).
@@ -91,10 +104,50 @@ _SYSTEM = (
 )
 
 
+_LANG_NAMES = {"en": "English", "km": "Khmer", "nl": "Dutch", "zh": "Chinese",
+               "es": "Spanish", "ru": "Russian", "bn": "Bengali"}
+
+# Languages written in a non-Latin script. These must NOT get the "leave English
+# terms in English" licence: given it, the model mixed Latin and even Greek letters
+# into Khmer bullets ("μυshrooms"), which looks broken to a native reader.
+_NON_LATIN = {"km", "zh", "ru", "bn", "ja", "ko", "ar", "th", "hi"}
+
+# Thai and Greek are never a target script here, so a character from either inside
+# a non-Latin summary is always a model glitch (observed ~1 in 6 Khmer runs: a Thai
+# consonant spliced into the Khmer word for straw). Latin is excluded on purpose —
+# proper nouns like "Serey" are supposed to stay in Latin letters.
+_FOREIGN_SCRIPT_RE = re.compile(r"[฀-๿Ͱ-Ͽ]")
+
+
 def _lang_instruction(lang: str) -> str:
-    names = {"en": "English", "km": "Khmer", "nl": "Dutch", "zh": "Chinese",
-             "es": "Spanish", "ru": "Russian", "bn": "Bengali"}
-    return f"Write the bullets in {names.get(lang, lang)}."
+    """Ask for a native-sounding summary, not a literal translation.
+
+    A bare "write the bullets in Dutch" produced word-for-word calques of English
+    sentence structure — grammatical but foreign-sounding to a native reader. Naming
+    the audience and forbidding mirrored structure fixed it in testing.
+    """
+    name = _LANG_NAMES.get(lang, lang)
+    if lang == "en":
+        return "Write the bullets in English."
+    instruction = (
+        f"Write the bullets in {name}, the way a native {name} speaker would write them "
+        f"for a {name}-speaking audience. Do not translate the English phrasing word for "
+        f"word: use natural {name} word order and idiom, and re-express each idea rather "
+        f"than mirroring the English sentence structure."
+    )
+    if lang in _NON_LATIN:
+        instruction += (
+            f" Write entirely in the {name} script, and never substitute a character from "
+            f"another writing system (Latin, Greek, Thai) inside a {name} word. The one "
+            f"exception is proper nouns and product names such as Serey: keep those in "
+            f"their original Latin spelling rather than transliterating them."
+        )
+    else:
+        instruction += (
+            f" Leave terms that {name} readers normally keep in English (product names, "
+            f"crypto and web jargon) in English instead of inventing a local word."
+        )
+    return instruction
 
 
 def _parse_bullets(raw: str) -> list[str]:
@@ -148,13 +201,28 @@ async def summarize_post(request: SummarizeRequest):
         + f"\n\nTitle: {request.title}\n\nArticle:\n{article_text[:_MAX_ARTICLE_CHARS]}"
     )
 
-    try:
-        raw = await asyncio.to_thread(grok.generate_text, prompt, _SYSTEM, 400)
-    except Exception as e:
-        logger.error("Grok summarize error: %s", e)
-        raise HTTPException(status_code=502, detail="AI service unavailable")
+    async def _generate() -> str:
+        if _PROVIDER == "grok":
+            return await asyncio.to_thread(grok.generate_text, prompt, _SYSTEM, 400, grok.SUMMARY_MODEL)
+        return await asyncio.to_thread(
+            gemini_client.generate_json, prompt, _SYSTEM, 1200, None, _BULLETS_SCHEMA
+        )
 
-    bullets = _parse_bullets(raw)
+    try:
+        raw = await _generate()
+        bullets = _parse_bullets(raw)
+        # One retry when the model splices a foreign script into a non-Latin summary.
+        # It is a sampling glitch, not a prompt failure, so re-rolling usually clears it;
+        # if the second try is just as broken we ship it rather than fail the request.
+        if bullets and lang in _NON_LATIN and _FOREIGN_SCRIPT_RE.search(" ".join(bullets)):
+            logger.warning("Foreign script in %s summary for %s/%s, retrying",
+                           lang, request.author, request.permlink)
+            retry = _parse_bullets(await _generate())
+            if retry and not _FOREIGN_SCRIPT_RE.search(" ".join(retry)):
+                bullets = retry
+    except Exception as e:
+        logger.error("%s summarize error: %s", _PROVIDER, e)
+        raise HTTPException(status_code=502, detail="AI service unavailable")
     if not bullets:
         logger.warning("Unparseable summary for %s/%s: %.200s", request.author, request.permlink, raw)
         raise HTTPException(status_code=502, detail="Could not summarize this article")

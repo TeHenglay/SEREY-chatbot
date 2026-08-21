@@ -19,11 +19,21 @@ _GROK_BUILDER_MODEL = "grok-4.3"
 # Vision model for image-understanding calls. Override with GROK_VISION_MODEL
 # (e.g. "grok-2-vision-1212") if the default rejects image input.
 _GROK_VISION_MODEL = os.getenv("GROK_VISION_MODEL", "grok-4.3")
+# Article TL;DR summaries. Kept separate from _GROK_MODEL so the summarizer can
+# move without dragging /api/chat and /chat/stream along.
+# NOTE: "grok-3-mini" above is a retired alias — xAI silently routes it to
+# grok-4.3, so CHAT_MODEL does not reflect what actually serves those requests.
+# grok-4.3 measured at ~4s for a 3-bullet Dutch summary; grok-4.6 took ~161s on
+# the same input (it reasons first) and blew the 40s timeout below, turning the
+# first reader's request into a 502. Dutch quality was equivalent. Don't "upgrade"
+# to 4.5/4.6 here without re-measuring latency against that timeout.
+_GROK_SUMMARY_MODEL = os.getenv("GROK_SUMMARY_MODEL", "grok-4.3")
 
 # Public aliases for route-level logging
 CHAT_MODEL = _GROK_MODEL
 BUILDER_MODEL = _GROK_BUILDER_MODEL
 VISION_MODEL = _GROK_VISION_MODEL
+SUMMARY_MODEL = _GROK_SUMMARY_MODEL
 
 # Module-level cached client instances
 _client: OpenAI | None = None
@@ -146,14 +156,19 @@ def generate_vision(text_prompt: str, image_urls: list[str], system: str | None 
                 raise
 
 
-def generate_text(prompt: str, system: str | None = None, max_tokens: int = 1500) -> str:
-    """Send a prompt to Grok and return a plain text response (for chatbot use)."""
+def generate_text(prompt: str, system: str | None = None, max_tokens: int = 1500,
+                  model: str | None = None) -> str:
+    """Send a prompt to Grok and return a plain text response (for chatbot use).
+
+    `model` overrides the default chat model for callers that need a different
+    one (e.g. the article summarizer); leave it None for chat/stream behaviour.
+    """
     client = _get_client()
     messages = _build_messages(prompt, system)
     for attempt in range(2):
         try:
             response = client.chat.completions.create(
-                model=_GROK_MODEL,
+                model=model or _GROK_MODEL,
                 messages=messages,
                 temperature=0.7,
                 max_tokens=max_tokens,
