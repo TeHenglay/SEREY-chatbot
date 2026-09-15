@@ -7,7 +7,7 @@ import asyncio
 from copy import deepcopy
 from fastapi import APIRouter, HTTPException, Header, Depends
 from services.security import require_serey_origin
-from schemas.chat import ChatRequest, BuilderChatResponse, UploadNeeded
+from schemas.chat import ChatRequest, BuilderChatResponse, BuilderUsage, UploadNeeded
 from schemas.blueprint import PageBlueprint, PatchCommand
 from services import grok
 from services import design_guidelines as design
@@ -211,22 +211,26 @@ def _extract_image_urls(page_context: str | None) -> list[str]:
     return urls
 
 
-async def _vision_context(message: str, page_context: str | None) -> str:
+async def _vision_context(message: str, page_context: str | None) -> tuple[str, bool]:
     """Returns a prompt block describing what the page's images actually show,
-    or '' when the message isn't about images / there are no image URLs."""
+    or '' when the message isn't about images / there are no image URLs.
+
+    The second value says whether the vision model was actually called — it is a
+    second model call, so serey-api charges an extra credit for it.
+    """
     msg_urls = _extract_message_image_urls(message)
     # Run vision when the user is talking about images OR just uploaded some in
     # the message (onboarding intake) — the freshly-uploaded photos are the ones
     # the copy must match, so they take priority over page_context images.
     if not msg_urls and (not message or not _IMAGE_WORD_RE.search(message)):
-        return ""
+        return "", False
     urls = list(msg_urls)
     for url in _extract_image_urls(page_context):
         if url not in urls:
             urls.append(url)
     urls = urls[:_MAX_VISION_IMAGES]
     if not urls:
-        return ""
+        return "", False
     numbered = "\n".join(f"Image {i}: {u}" for i, u in enumerate(urls, start=1))
     vision_prompt = (
         "For each image, reply with exactly one line in the form "
@@ -237,12 +241,13 @@ async def _vision_context(message: str, page_context: str | None) -> str:
         raw = await asyncio.to_thread(grok.generate_vision, vision_prompt, urls, None)
     except Exception as e:
         logger.warning("Vision pre-analysis failed (%s) — continuing without it", str(e))
-        return ""
+        # Not charged: a failed call gave the answer nothing to work with.
+        return "", False
     return (
         "\n== WHAT THE PAGE'S IMAGES ACTUALLY SHOW (vision analysis — trust this, "
         "match each Image N to its URL in the page state) ==\n"
         f"{numbered}\n{raw.strip()}\n"
-    )
+    ), True
 
 
 def _get_prev_page_context(session_id: str) -> str | None:
@@ -946,6 +951,8 @@ async def builder_chat(request: ChatRequest):
         return BuilderChatResponse(
             reply=reply,
             revert=True,
+            # No model was called, so this turn is free.
+            usage=BuilderUsage(outcome="revert", vision_used=False),
             user_id=request.user_id,
             session_id=request.session_id,
         )
@@ -988,7 +995,7 @@ async def builder_chat(request: ChatRequest):
             )
 
     # When the user asks about images, look at them with the vision model first
-    vision_section = await _vision_context(request.message, request.page_context)
+    vision_section, vision_used = await _vision_context(request.message, request.page_context)
 
     full_prompt = f"""{community_ctx}
 
@@ -1005,6 +1012,9 @@ Respond with valid JSON now:
 
     # 3. Call Grok — retry once on malformed JSON
     data = None
+    # Token counts of the call that actually produced the answer. A retried
+    # attempt overwrites these, so what is reported is what was kept.
+    token_counts: dict[str, int] = {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0}
     def _clean_raw(raw: str) -> str:
         """Strip markdown code fences the model sometimes wraps around JSON."""
         stripped = raw.strip()
@@ -1017,7 +1027,9 @@ Respond with valid JSON now:
     for attempt in (1, 2):
         raw_response = ""
         try:
-            raw_response = await asyncio.to_thread(grok.generate_builder, full_prompt, BUILDER_SYSTEM_PROMPT)
+            raw_response, token_counts = await asyncio.to_thread(
+                grok.generate_builder_with_usage, full_prompt, BUILDER_SYSTEM_PROMPT
+            )
             cleaned = _clean_raw(raw_response)
             if not cleaned:
                 raise ValueError("Model returned empty content after fence stripping")
@@ -1305,10 +1317,27 @@ Respond with valid JSON now:
     except Exception as e:
         logger.warning("Failed to save builder_chat memory: %s", str(e))
 
+    # What this turn produced, which is what it costs. A blueprint is a whole
+    # page and prices accordingly; patches and plain replies are one credit.
+    if blueprint is not None:
+        outcome = "blueprint"
+    elif patches:
+        outcome = "patches"
+    elif revert_fallback:
+        outcome = "revert"
+    else:
+        outcome = "reply"
+
     return BuilderChatResponse(
         reply=reply,
         revert=revert_fallback,
         animation_style=animation_style,
+        usage=BuilderUsage(
+            outcome=outcome,
+            vision_used=vision_used,
+            model=grok.BUILDER_MODEL,
+            **token_counts,
+        ),
         blueprint=blueprint,
         patches=patches,
         uploads_needed=uploads_needed,

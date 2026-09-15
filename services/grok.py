@@ -89,8 +89,15 @@ def generate(prompt: str) -> str:
                 raise
 
 
-def generate_builder(prompt: str, system: str | None = None) -> str:
-    """Send a prompt to Grok using the builder model and return raw JSON text."""
+def generate_builder_with_usage(
+    prompt: str, system: str | None = None
+) -> tuple[str, dict]:
+    """Send a prompt to Grok using the builder model.
+
+    Returns the raw JSON text AND what the call cost in tokens. Those counts
+    used to be logged and thrown away; serey-api now bills AI credits per turn
+    and needs them on the response to calibrate what a credit is worth.
+    """
     client = _get_client()
     messages = _build_messages(prompt, system)
     for attempt in range(2):
@@ -108,16 +115,28 @@ def generate_builder(prompt: str, system: str | None = None) -> str:
             if not response.choices[0].message.content:
                 raise ValueError("Grok returned empty response")
             usage = response.usage
+            counts = {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0}
             if usage:
                 cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
                 logger.info("Builder usage: prompt=%d cached=%d completion=%d", usage.prompt_tokens, cached, usage.completion_tokens)
-            return response.choices[0].message.content
+                counts = {
+                    "prompt_tokens": usage.prompt_tokens or 0,
+                    "cached_tokens": cached,
+                    "completion_tokens": usage.completion_tokens or 0,
+                }
+            return response.choices[0].message.content, counts
         except Exception as e:
             if attempt == 0:
                 logger.warning("Grok builder attempt 1 failed (%s), retrying in 2s...", str(e))
                 time.sleep(2)
             else:
                 raise
+
+
+def generate_builder(prompt: str, system: str | None = None) -> str:
+    """Text-only wrapper, for callers that do not meter (routes/builder.py)."""
+    text, _usage = generate_builder_with_usage(prompt, system)
+    return text
 
 
 def generate_vision(text_prompt: str, image_urls: list[str], system: str | None = None) -> str:

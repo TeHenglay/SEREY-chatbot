@@ -78,10 +78,37 @@ class StyleSelection(BaseModel):
     )
 
 
+class BuilderUsage(BaseModel):
+    """What one builder turn cost.
+
+    serey-api bills AI credits per turn and cannot know the price in advance:
+    the same message may come back as a one-line reply or a whole new page. It
+    reserves the worst case, then reads `outcome` here to settle the real cost.
+    The token counts ride along so the credit price can be calibrated against
+    what the turns actually cost us.
+    """
+    outcome: str = Field(
+        ...,
+        description="What the turn produced: 'reply' | 'patches' | 'blueprint' | 'revert'",
+    )
+    vision_used: bool = Field(
+        default=False,
+        description="True when the images were run through the vision model first (a second model call)",
+    )
+    prompt_tokens: int = Field(default=0)
+    cached_tokens: int = Field(default=0)
+    completion_tokens: int = Field(default=0)
+    model: Optional[str] = Field(default=None)
+
+
 class BuilderChatResponse(BaseModel):
     """Response from the builder chatbot. Always has a reply; blueprint is present when
     the AI generates or updates a page layout."""
     reply: str = Field(..., description="Conversational reply from the AI")
+    usage: Optional[BuilderUsage] = Field(
+        default=None,
+        description="Cost of this turn — read by serey-api to settle AI credits",
+    )
     revert: bool = Field(
         default=False,
         description="True when the user asked to undo the whole last change — the frontend should restore its previous local snapshot instead of applying patches",
