@@ -438,22 +438,53 @@ def _revert_reply(message: str, lang: str | None, *, apologetic: bool = True) ->
 
 _AUTO_IMAGES_ENABLED = os.getenv("BUILDER_AUTO_IMAGES", "true").strip().lower() in ("1", "true", "yes")
 _ONBOARDING_FINAL_RE = re.compile(r"guided multi-step flow[\s\S]*Current phase:\s*final", re.IGNORECASE)
-# Any image the user supplied during onboarding (uploads, banner/logo lines, chat attachments).
-_USER_IMAGE_RE = re.compile(
-    r"https?://\S+\.(?:png|jpe?g|webp|gif|avif|heic)\b|https?://(?:storage|upload)\.serey\.io/\S+|\[image:",
-    re.IGNORECASE,
+# Photos the user uploaded during onboarding: URLs in the intake's "Banner
+# images:"/"Additional images:" fields, or explicit [image: URL] attachments.
+# The "Logo:" line is intentionally excluded because the frontend fills it from
+# the page's existing footer logo when the user uploads nothing.
+_PHOTO_FIELD_RE = re.compile(
+    r"^\s*(?:Banner images|Additional images):[ \t]*(.*?)(?="
+    r"^\s*[A-Za-z][^:\r\n]{0,80}:[ \t]*|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+_LOGO_URL_RE = re.compile(
+    r"^\s*Logo:\s*(https?://[^\s\"'<>\)\]]+)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ATTACHED_PHOTO_RE = re.compile(
+    r"(?:\[image:\s*|^\s*Attached images?\s*:\s*)"
+    r"https?://[^\s\"'<>\)\]]+",
+    re.IGNORECASE | re.MULTILINE,
 )
 # (section, field, image style to switch to when the AI's chosen style renders no image)
 _AUTO_IMAGE_SLOTS = (("HERO", "image_url", 1), ("ABOUT", "image_url", 8))
 _MIN_IMAGE_BUDGET_S = 20.0
 
 
-def _wants_auto_images(message: str) -> bool:
-    return (
-        _AUTO_IMAGES_ENABLED
-        and bool(_ONBOARDING_FINAL_RE.search(message or ""))
-        and not _USER_IMAGE_RE.search(message or "")
+def _user_uploaded_photos(message: str) -> bool:
+    logo_urls = {
+        match.group(1).rstrip(".,;")
+        for match in _LOGO_URL_RE.finditer(message)
+    }
+    photo_message = message
+    for logo_url in logo_urls:
+        photo_message = photo_message.replace(logo_url, "")
+    if _ATTACHED_PHOTO_RE.search(photo_message):
+        return True
+    return any(
+        _URL_RE.search(field.group(1))
+        for field in _PHOTO_FIELD_RE.finditer(photo_message)
     )
+
+
+def _wants_auto_images(message: str) -> bool:
+    message = message or ""
+    if not (_AUTO_IMAGES_ENABLED and _ONBOARDING_FINAL_RE.search(message)):
+        return False
+    if _user_uploaded_photos(message):
+        logger.info("First-build images skipped: the user uploaded photos during onboarding")
+        return False
+    return True
 
 
 def _fallback_image_prompt(section: dict[str, Any], slot_type: str) -> str:
@@ -469,12 +500,13 @@ async def _auto_fill_key_images(
     raw_blueprint: dict[str, Any],
     image_prompts: Any,
     deadline: float,
+    prefetched: dict[str, str] | None = None,
 ) -> list[GeneratedImage]:
     """Generate the empty hero/about photos in parallel and place them in the
     blueprint. A section is switched to an image layout ONLY when its image
     arrived, so a failed generation leaves the AI's text-led layout intact."""
     remaining = deadline - time.monotonic()
-    if remaining < _MIN_IMAGE_BUDGET_S:
+    if not prefetched and remaining < _MIN_IMAGE_BUDGET_S:
         logger.warning("Skipping first-build images: only %.0fs of budget left", remaining)
         return []
     prompts = image_prompts if isinstance(image_prompts, dict) else {}
@@ -493,11 +525,22 @@ async def _auto_fill_key_images(
     if not jobs:
         return []
 
-    timeout = min(image_gen.IMAGE_TIMEOUT_S, remaining - 5)
-    results = await asyncio.gather(
-        *(asyncio.to_thread(image_gen.generate_image, prompt, "16:9", timeout) for *_, prompt in jobs),
-        return_exceptions=True,
-    )
+    generated_jobs = [
+        asyncio.to_thread(
+            image_gen.generate_image,
+            prompt,
+            "16:9",
+            min(image_gen.IMAGE_TIMEOUT_S, max(5.0, deadline - time.monotonic() - 5)),
+        )
+        for section, slot_type, field, image_style, prompt in jobs
+        if not prefetched or slot_type not in prefetched
+    ]
+    generated_results = await asyncio.gather(*generated_jobs, return_exceptions=True)
+    generated_iter = iter(generated_results)
+    results: list[Any] = [
+        prefetched[slot_type] if prefetched and slot_type in prefetched else next(generated_iter)
+        for _section, slot_type, _field, _image_style, _prompt in jobs
+    ]
     generated: list[GeneratedImage] = []
     for (section, stype, field, image_style, prompt), result in zip(jobs, results):
         if isinstance(result, BaseException):
@@ -518,6 +561,45 @@ async def _auto_fill_key_images(
         ))
     logger.info("First-build images: %d/%d generated", len(generated), len(jobs))
     return generated
+
+
+async def _prefetch_auto_images(message: str, deadline: float) -> dict[str, str]:
+    """Generate first-build images alongside the slower blueprint model call."""
+    context = " ".join((message or "").split())[:1400]
+    prompts = {
+        "HERO": (
+            f"Clean wide editorial hero background photograph, image-only, for the business "
+            f"described here: {context}. Show only the real-world products, materials, setting, "
+            "and atmosphere. Leave calm visual space for website copy to be overlaid separately. "
+            "Do not create a website mockup, advertisement, poster, banner design, or promotional "
+            "graphic."
+        ),
+        "ABOUT": (
+            f"Clean editorial about-section photograph, image-only, for the business described "
+            f"here: {context}. Show only the real-world products, materials, setting, and "
+            "craftsmanship. Do not create a website mockup, advertisement, poster, banner design, "
+            "promotional graphic, or text-bearing composition."
+        ),
+    }
+    results = await asyncio.gather(
+        *(
+            asyncio.to_thread(
+                image_gen.generate_image,
+                prompt,
+                "16:9",
+                min(image_gen.IMAGE_TIMEOUT_S, max(5.0, deadline - time.monotonic() - 5)),
+            )
+            for prompt in prompts.values()
+        ),
+        return_exceptions=True,
+    )
+    prefetched: dict[str, str] = {}
+    for slot_type, result in zip(prompts, results):
+        if isinstance(result, BaseException):
+            logger.warning("Prefetched first-build %s image failed: %s", slot_type, result)
+        else:
+            prefetched[slot_type] = result
+    return prefetched
 
 
 def _last_change_was_color_only(session_id: str) -> bool:
@@ -1048,9 +1130,11 @@ OR when just answering a question (no layout change):
      copy that exact URL — never overwrite it with "".
    - EQUALLY VALID: Serey upload URLs (https://upload.serey.io/..., https://storage.serey.io/... or
      any other *.serey.io host) that the USER's message provides under "Banner
-     images:", "Additional images:", "Logo:", or "[image: ...]" markers are user-uploaded images —
+     images:", "Additional images:", or "[image: ...]" markers are user-uploaded images —
      treat them exactly like ALREADY UPLOADED: copy them verbatim into the most suitable image
      fields (see GUIDED ONBOARDING INTAKE) and do NOT list slots filled this way in uploads_needed.
+     A URL under "Logo:" is branding only: copy it only to FOOTER.logo_url, never to HERO,
+     ABOUT, GALLERY, or any other photo/image field.
      URLs from any other domain are still banned — leave those fields "".
    - If a section needs an image, set the field to "" — the user is prompted to upload it (rule 9).
 5. Only when the request has NO usable context at all (no page_context, no community or business
@@ -1263,6 +1347,11 @@ Respond with valid JSON now:
     # serey-api settles credits from these.
     token_counts: dict[str, int] = grok.empty_usage()
     deadline = time.monotonic() + _BUILDER_TIME_BUDGET_S
+    auto_image_task = (
+        asyncio.create_task(_prefetch_auto_images(request.message, deadline))
+        if _wants_auto_images(request.message)
+        else None
+    )
     prompt_for_attempt = full_prompt
     def _clean_raw(raw: str) -> str:
         """Strip markdown code fences the model sometimes wraps around JSON."""
@@ -1450,8 +1539,12 @@ Respond with valid JSON now:
             normalized_blueprint = _normalize_blueprint(raw_blueprint)
             # First build without any user images: generate the hero/about photos.
             if _wants_auto_images(request.message):
+                prefetched_images = await auto_image_task if auto_image_task else None
                 generated_images = await _auto_fill_key_images(
-                    normalized_blueprint, data.get("image_prompts"), deadline
+                    normalized_blueprint,
+                    data.get("image_prompts"),
+                    deadline,
+                    prefetched_images,
                 )
             blueprint = PageBlueprint(**normalized_blueprint)
         except Exception as e:
