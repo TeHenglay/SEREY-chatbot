@@ -327,6 +327,21 @@ _TO_DUTCH_RE = re.compile(
 )
 _language_override: dict[str, tuple[float, str]] = {}
 
+# Keep this deliberately conservative: these are common function words that
+# distinguish ordinary Dutch/English builder requests, not page-content terms
+# such as "site", "color", or "image" that occur in both languages.
+_DUTCH_MESSAGE_WORDS = {
+    "als", "ben", "bij", "de", "een", "en", "het", "hoe", "in", "is",
+    "je", "kun", "maar", "met", "naar", "niet", "ook", "op", "van",
+    "verander", "veranderen", "voor", "waar", "wat", "wil", "wilt",
+    "zijn", "zo", "zonder",
+}
+_ENGLISH_MESSAGE_WORDS = {
+    "a", "an", "and", "are", "change", "for", "how", "i", "in", "is",
+    "make", "my", "of", "on", "please", "the", "to", "want", "what",
+    "with", "without", "you",
+}
+
 
 def _requested_language(message: str) -> str | None:
     """'en' / 'nl' when the message explicitly asks Bob to switch language."""
@@ -337,6 +352,18 @@ def _requested_language(message: str) -> str | None:
     if wants_en == wants_nl:  # neither, or ambiguous ("translate English to Dutch")
         return None
     return "en" if wants_en else "nl"
+
+
+def _detected_message_language(message: str) -> str | None:
+    """Detect a clear Dutch/English request without external language services."""
+    words = set(re.findall(r"[a-zA-ZÀ-ÿ]+", (message or "").lower()))
+    dutch_score = len(words & _DUTCH_MESSAGE_WORDS)
+    english_score = len(words & _ENGLISH_MESSAGE_WORDS)
+    if dutch_score >= 2 and dutch_score > english_score:
+        return "nl"
+    if english_score >= 2 and english_score > dutch_score:
+        return "en"
+    return None
 
 
 # Site languages that pin Bob's reply language. Any other selector value
@@ -375,6 +402,9 @@ def _resolve_reply_language(request: ChatRequest) -> str | None:
     if requested:
         _remember_session_value(_language_override, session_id, requested)
         return requested
+    detected = _detected_message_language(request.message)
+    if detected:
+        return detected
     entry = _language_override.get(session_id)
     if entry and time.time() - entry[0] <= _PREV_CONTEXT_TTL_SECS:
         return entry[1]
