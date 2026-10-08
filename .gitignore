@@ -163,3 +163,11 @@ chroma_db/
 .DS_Store
 Thumbs.db
 .claude/settings.local.json
+
+# Local-only docs (not for GitHub)
+CLAUDE.md
+AI_BUILDER_INTEGRATION_SPEC.md
+BUILDER_V2_AI_BACKEND.md
+
+# Generated script output
+scripts/out/

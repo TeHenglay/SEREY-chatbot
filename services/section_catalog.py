@@ -33,6 +33,7 @@ SECTION_TYPE_ID_MAP: dict[int, str] = {
     12: "RANKING",
     13: "SUBSCRIPTION",
     14: "NEWSLETTER",
+    15: "NOTES",
 }
 
 SECTION_TYPE_NAME_TO_ID: dict[str, int] = {v: k for k, v in SECTION_TYPE_ID_MAP.items()}
@@ -64,9 +65,10 @@ SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
     ),
     "ABOUT": (
         (8, "Social", "Image on left, title and description on right with a row of social links below"),
-        (1, "Panel", "Colored left panel with the text beside the image"),
+        (1, "Panel", "Colored accent panel on the left with the text beside it, no image"),
         (4, "Text Only", "Centered title and description, no image"),
         (9, "Split Panel", "Two columns: description on a light panel, title on a slightly darker panel"),
+        (13, "Spotlight", "Portrait image with a star-rating badge, title/description with a Learn More button and a small accent photo — fixed layout"),
     ),
     "GALLERY": (
         (1, "Classic", "Uniform 3-column image grid"),
@@ -76,12 +78,16 @@ SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
         (5, "Coverflow", "Center image large and centered, fading/shrinking out on each side — slides one at a time"),
         (6, "Slideshow", "Full-width slideshow with arrows, dots, and autoplay"),
         (7, "Wall", "Tight no-gap grid with many small cells"),
+        (8, "Feature Strip", "Large featured image on the left with a narrow vertical stack of 4 thumbnails on the right"),
+        (9, "Mosaic Grid", "Top row of 4 equal photos; bottom row has the 5th photo large with the 6th/7th stacked beside it"),
     ),
     "VIDEO": (
         (1, "Classic", "Title and description above a single centered video player"),
         (2, "Split", "Text column on one side, video player on the other"),
         (3, "Showcase", "One large featured video with a sidebar list of the others"),
         (4, "Film Review", "Editorial film-review layout: rules, eyebrow label, big title, then a row of players"),
+        (5, "Feature", "Click-to-play video thumbnail on one side, title and description on the other"),
+        (6, "Grid", "Up to 4 click-to-play video thumbnails in a 2x2 card grid, each with its own title"),
     ),
     "VISION": (
         (1, "Cards", "Goal, Vision, Mission each in a separate colored card"),
@@ -158,6 +164,11 @@ SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
         (4, "Gradient Split", "Dark gradient background with logo and socials on left, contact on right, social icons as glowing circles"),
         (5, "Editorial", "Bold top border, brand and socials in a top row, contact chips and copyright in bottom row — clean magazine style"),
     ),
+    "NOTES": (
+        (1, "Slider", "Dark band with a 3-up slider of trending note cards (author, text, image)"),
+        (2, "Masonry", "Pinterest-style wall of all notes in staggered columns"),
+        (3, "Spotlight", "One large featured note on the left with a compact list of the next notes on the right"),
+    ),
     # Not in the frontend style picker — single-layout sections.
     "NEWSLETTER": ((1, "Default", "Simple newsletter signup block"),),
     "TEXTBLOCK": ((1, "Default", "Free-form rich text block"),),
@@ -196,6 +207,7 @@ STYLE_WEIGHTS: dict[str, dict[str, tuple[int, ...]]] = {
     "TEAM":         {"high": (1, 6), "low": (2, 3)},
     "FAQ":          {"high": (1, 2, 3, 4, 5, 6, 7), "low": ()},
     "SUBSCRIPTION": {"high": (2, 4), "low": ()},
+    "NOTES":        {"high": (1, 2, 3), "low": ()},
 }
 
 
@@ -221,11 +233,12 @@ def style_weight(section_type: str, style: int) -> str:
 def _build_rendered_fields() -> dict[str, dict[int, tuple[str, ...]]]:
     rendered: dict[str, dict[int, tuple[str, ...]]] = {}
     scalar_rules: dict[str, dict[str, tuple[int, ...]]] = {
-        # Mirrors IMAGE_FIELD_STYLE_RULES, intersected with the styles that
-        # still exist: hero style 3 (Centered) and about styles 4 (Text Only)
-        # and 9 (Split Panel) are text-only, so they get no scalar image slot.
+        # Verified against the renderers (Shared/LandingPageV2/HeroSection.js,
+        # AboutSection.js): hero style 3 (Centered) and about styles 1 (Panel),
+        # 4 (Text Only) and 9 (Split Panel) render no image; about 13
+        # (Spotlight) renders a main photo plus a small accent photo.
         "HERO": {"image_url": (1, 4, 5, 6)},
-        "ABOUT": {"image_url": (1, 8)},
+        "ABOUT": {"image_url": (8, 13), "image_url_2": (13,)},
         "CUSTOM": {"image_url": (1, 2, 3, 4, 5, 6), "image_url_2": (6,)},
     }
     array_fields: dict[str, str] = {
@@ -266,6 +279,7 @@ SECTION_STYLE_MAP: dict[str, dict[str, Any]] = {
 SCALAR_UPLOAD_LABELS: dict[tuple[str, str], str] = {
     ("hero", "image_url"): "Hero Background",
     ("about", "image_url"): "About Section Image",
+    ("about", "image_url_2"): "About Accent Photo",
     ("custom", "image_url"): "Custom Section Image",
     ("custom", "image_url_2"): "Custom Section Image 2",
     ("footer", "logo_url"): "Footer Logo",
@@ -349,6 +363,7 @@ SECTION_COLOR_KEYS: dict[str, tuple[str, ...]] = {
     "TESTIMONIALS": ("title", "body", "accent", "bg"),
     "CUSTOM": ("title", "body", "accent", "bg"),
     "RANKING": ("title", "bg"),
+    "NOTES": ("title", "body", "bg"),
     "SUBSCRIPTION": ("bg", "card_bg", "accent"),
     "FOOTER": ("title", "bg", "accent"),
     "NEWSLETTER": ("title", "bg", "accent"),
@@ -377,7 +392,7 @@ TEXT_STYLE_SUFFIXES: tuple[str, ...] = ("_bold", "_italic", "_font", "_size", "_
 
 SECTION_FIELD_DOCS: dict[str, str] = {
     "HERO": 'title, subtitle, description, image_url, image_ratio ("16:9"), image_width (null), image_height (null), image_shape ("" | square | rounded | circle | arch | diamond | hexagon | blob | star)',
-    "ABOUT": 'title, subtitle, description, image_url, image_ratio ("16:9"), image_width (null), image_height (null), image_shape',
+    "ABOUT": 'title, subtitle, description, image_url, image_url_2 (style 13 accent photo only), image_ratio ("16:9"), image_width (null), image_height (null), image_shape',
     "GALLERY": 'title, description, images[{image_url, name, description}], section_subtype ("product" = product/services/features cards with name+description; "gallery" = plain photo grid; "project" = portfolio project cards). Every image item MUST have image_url (""), name, and description.',
     "FOOTER": 'title, description, phone, email, location, logo_url, contact_heading, social_heading, privacy_url, terms_url, social_links[{"type":"facebook"|"instagram"|"telegram","handle":"..."}]',
     "VIDEO": "title, description, videos[{url, title, thumbnail}]",
@@ -385,9 +400,10 @@ SECTION_FIELD_DOCS: dict[str, str] = {
     "BLOG": 'title, subtitle, description, feed_type ("trending" | "latest") — posts are auto-fetched, never invent them',
     "TEAM": "title, description, members[{name, role, image_url}]",
     "FAQ": "title, faq_items[{question, answer}]",
-    "TESTIMONIALS": "title, testimonial_items[{name, role, content, image_url}] (max 6)",
+    "TESTIMONIALS": "title, testimonial_items[{name, role, content, image_url}] (generate at most 4)",
     "CUSTOM": "title, description, button_label, button_url, image_url, image_url_2, image_url_3, image_shape",
     "RANKING": "title, description, authors (always leave as []) — top authors are auto-fetched",
+    "NOTES": 'title, description, feed_type ("trending" | "latest") — community notes are auto-fetched, never invent them',
     "SUBSCRIPTION": 'title, description, button_label ("Subscribe"), placeholder_text, newsletter_provider ("" | "kit" | "email_octopus"), kit_embed_script, email_octopus_embed_script — leave provider/embed fields "" unless the user provides them',
     "TEXTBLOCK": "title, description, content (free-form rich text) — emit type as the string \"TEXTBLOCK\" (it has no numeric ID)",
 }
@@ -439,17 +455,11 @@ FRONTEND_TEMPLATES: dict[str, dict[str, Any]] = {
             ("TESTIMONIALS", 7, None, False), ("FOOTER", 1, None, False),
         ),
     },
-    "publisher": {
-        "label": "Publisher",
-        "animation": "slide-left",
-        "font": "Lora",
-        "sections": (
-            ("HERO", 5, None, False), ("ABOUT", 4, None, False),
-            ("BLOG", 6, None, False), ("VIDEO", 1, None, True),
-            ("GALLERY", 3, "gallery", False), ("TEAM", 1, None, False),
-            ("RANKING", 1, None, False), ("FOOTER", 5, None, False),
-        ),
-    },
+    # The "News Outlet" (publisher) template was removed from the frontend on
+    # 2026-08-05 (fe-serey-web f2f3b5023), so it is not offered to the AI either.
+    # The frontend templates also use legacy hero/about style 2, which the style
+    # picker no longer offers; they are mapped to the nearest picker styles that
+    # render the same photo (hero 1 Backdrop, about 8 Social).
 }
 
 
@@ -470,7 +480,7 @@ def build_templates_block() -> str:
 # styles to avoid). Mirrors the cheat sheet in BUILDER_V2_AI_BACKEND.md.
 TEMPLATE_EXTRA_STYLE_GUIDE: dict[str, dict[str, str]] = {
     "ecommerce": {
-        "use": "bold high-contrast layouts — GALLERY product s5, VISION s2, TEAM s5, FAQ s1, SUBSCRIPTION s4",
+        "use": "bold high-contrast layouts — VISION s2, TEAM s5, FAQ s1, SUBSCRIPTION s4 (product galleries stay s1)",
         "avoid": "soft serif/editorial styles (magazine and pull-quote layouts)",
     },
     "creator": {
@@ -480,10 +490,6 @@ TEMPLATE_EXTRA_STYLE_GUIDE: dict[str, dict[str, str]] = {
     "portfolio": {
         "use": "clean white minimal text-led layouts — ABOUT s9, FAQ s3, VISION s5, TESTIMONIALS s9",
         "avoid": "cinematic dark styles and product-card shelves",
-    },
-    "publisher": {
-        "use": "editorial layouts — BLOG s6/s7, GALLERY s3, TEAM s1, FAQ s7, VIDEO s4, TESTIMONIALS s10",
-        "avoid": "product cards and dark e-commerce styles",
     },
 }
 
@@ -495,11 +501,13 @@ def build_template_extras_block() -> str:
     return "\n".join(lines)
 
 
-# Sections the AI may generate. NEWSLETTER is excluded — the current frontend
-# cannot parse numeric type 14; use SUBSCRIPTION (13) for email signup.
+# Sections the AI may generate = sections the frontend can map AND render
+# (LandingBuilderV2.js resolveTypeKey). Excluded although they exist in the
+# frontend enum: NEWSLETTER (14) — use SUBSCRIPTION (13) for email signup — and
+# CUSTOM (11), which has no mapping or renderer, so the frontend silently drops it.
 GENERATABLE_SECTIONS: tuple[str, ...] = (
     "HERO", "ABOUT", "GALLERY", "FOOTER", "VIDEO", "VISION", "BLOG", "TEAM",
-    "FAQ", "TESTIMONIALS", "CUSTOM", "RANKING", "SUBSCRIPTION", "TEXTBLOCK",
+    "FAQ", "TESTIMONIALS", "RANKING", "SUBSCRIPTION", "NOTES", "TEXTBLOCK",
 )
 
 

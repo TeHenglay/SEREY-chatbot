@@ -98,7 +98,7 @@ SECTION_TYPES = Literal[
     "HERO", "ABOUT", "GALLERY", "FOOTER",
     "VIDEO", "VISION", "BLOG", "TEAM",
     "FAQ", "TESTIMONIALS", "CUSTOM", "RANKING",
-    "SUBSCRIPTION", "NEWSLETTER", "TEXTBLOCK",
+    "SUBSCRIPTION", "NEWSLETTER", "NOTES", "TEXTBLOCK",
 ]
 
 
@@ -108,7 +108,7 @@ class SectionBlock(BaseModel):
     type: SECTION_TYPES = Field(..., description="Section type string, e.g. 'HERO' (stored as string, serialized as int)")
     style: int = Field(1, description="Style variant number (see layout_policy for options per type)")
     is_hidden: bool = Field(False)
-    instance_key: str | None = Field(None, description="Unique key for duplicate section instances, e.g. 'team_1'")
+    instance_key: str | None = Field(None, description="Unique key per section instance: bare name first ('team'), then 'team__2', 'team__3'")
     colors: dict[str, str] | None = Field(
         None,
         description="Color overrides: title, accent, body, bg, subtitle, goal_color, vision_color, mission_color, card_bg, btn, btn_text",
@@ -245,7 +245,7 @@ class PatchCommand(BaseModel):
         ...,
         description="Section type string to target, e.g. 'HERO'",
     )
-    instance_key: str | None = Field(None, description="Target a specific instance, e.g. 'team_2'")
+    instance_key: str | None = Field(None, description="Target a specific instance, e.g. 'team__2'")
     updates: dict[str, Any] = Field(
         default_factory=dict,
         description="Key-value pairs to apply (e.g. {'title': 'New Title'})",

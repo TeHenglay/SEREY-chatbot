@@ -3,7 +3,14 @@
 # Grok supports multiple languages including Khmer.
 
 import asyncio
-from openai import OpenAI, AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
 import os
 import time
 import logging
@@ -89,17 +96,64 @@ def generate(prompt: str) -> str:
                 raise
 
 
+BUILDER_CALL_TIMEOUT_S = 90.0
+
+
+def empty_usage() -> dict:
+    return {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0}
+
+
+def add_usage(total: dict, extra: dict) -> dict:
+    """Sum token counts — every billed attempt must reach serey-api's meter."""
+    return {k: total.get(k, 0) + extra.get(k, 0) for k in empty_usage()}
+
+
+class UnusableBuilderOutput(Exception):
+    """The model answered (and billed tokens) but the output cannot be used:
+    empty, or cut off at max_tokens. Carries the counts so they are not lost."""
+
+    def __init__(self, reason: str, text: str, counts: dict):
+        super().__init__(reason)
+        self.reason = reason
+        self.text = text
+        self.counts = counts
+
+
+# Fast, transient failures worth one immediate retry. Timeouts are NOT here: a
+# second slow attempt cannot fit in serey-api's 120s proxy budget.
+_TRANSIENT_ERRORS = (APIConnectionError, RateLimitError, InternalServerError)
+
+
+def _usage_counts(response) -> dict:
+    usage = response.usage
+    if not usage:
+        return empty_usage()
+    cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+    logger.info("Builder usage: prompt=%d cached=%d completion=%d", usage.prompt_tokens, cached, usage.completion_tokens)
+    return {
+        "prompt_tokens": usage.prompt_tokens or 0,
+        "cached_tokens": cached,
+        "completion_tokens": usage.completion_tokens or 0,
+    }
+
+
 def generate_builder_with_usage(
-    prompt: str, system: str | None = None
+    prompt: str, system: str | None = None, timeout: float = BUILDER_CALL_TIMEOUT_S
 ) -> tuple[str, dict]:
     """Send a prompt to Grok using the builder model.
 
-    Returns the raw JSON text AND what the call cost in tokens. Those counts
-    used to be logged and thrown away; serey-api now bills AI credits per turn
-    and needs them on the response to calibrate what a credit is worth.
+    Returns the raw JSON text AND what the call cost in tokens (serey-api bills
+    AI credits per turn from these). Raises UnusableBuilderOutput when the model
+    answered but the text is empty or truncated, so the caller can decide
+    whether a re-generation fits its time budget.
+
+    SDK-level retries are disabled (the default 2 retries also retry timeouts,
+    tripling worst-case latency); this function retries once, on fast transient
+    errors only, within the given timeout.
     """
-    client = _get_client()
+    client = _get_client().with_options(max_retries=0)
     messages = _build_messages(prompt, system)
+    deadline = time.monotonic() + timeout
     for attempt in range(2):
         try:
             response = client.chat.completions.create(
@@ -109,28 +163,25 @@ def generate_builder_with_usage(
                 # 4096 could truncate a large 7-section blueprint mid-JSON,
                 # guaranteeing a parse failure + retry + 422.
                 max_tokens=8192,
-                timeout=90,
+                timeout=max(deadline - time.monotonic(), 1.0),
                 extra_headers={"x-grok-conv-id": "serey-builder-v1"},
             )
-            if not response.choices[0].message.content:
-                raise ValueError("Grok returned empty response")
-            usage = response.usage
-            counts = {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0}
-            if usage:
-                cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
-                logger.info("Builder usage: prompt=%d cached=%d completion=%d", usage.prompt_tokens, cached, usage.completion_tokens)
-                counts = {
-                    "prompt_tokens": usage.prompt_tokens or 0,
-                    "cached_tokens": cached,
-                    "completion_tokens": usage.completion_tokens or 0,
-                }
-            return response.choices[0].message.content, counts
-        except Exception as e:
-            if attempt == 0:
-                logger.warning("Grok builder attempt 1 failed (%s), retrying in 2s...", str(e))
+        except _TRANSIENT_ERRORS as e:
+            # APITimeoutError subclasses APIConnectionError — never retry it.
+            if attempt == 0 and not isinstance(e, APITimeoutError) and deadline - time.monotonic() > 30:
+                logger.warning("Grok builder transient error (%s), retrying in 2s...", str(e))
                 time.sleep(2)
-            else:
-                raise
+                continue
+            raise
+        counts = _usage_counts(response)
+        choice = response.choices[0]
+        text = choice.message.content or ""
+        if choice.finish_reason == "length":
+            raise UnusableBuilderOutput("truncated at max_tokens", text, counts)
+        if not text.strip():
+            raise UnusableBuilderOutput("empty response", text, counts)
+        return text, counts
+    raise RuntimeError("unreachable")
 
 
 def generate_builder(prompt: str, system: str | None = None) -> str:

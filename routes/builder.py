@@ -9,6 +9,7 @@ from schemas.blueprint import PageBlueprint
 from services import grok, memory
 from services import design_guidelines as design
 from services import section_catalog as catalog
+from services.blueprint_validator import sanitize_content
 from services.security import require_serey_origin, verify_api_key
 import json
 import logging
@@ -118,6 +119,8 @@ Generate the JSON blueprint now:
         if not cleaned:
             raise ValueError("Model returned empty content")
         data = json.loads(cleaned)
+        if isinstance(data, dict):
+            data["content"] = sanitize_content(data.get("content"), request.prompt or "")
         blueprint = PageBlueprint(**data)
     except json.JSONDecodeError as e:
         logger.error("JSON decode error from AI: %s | Raw: %s", str(e), raw_json[:500])
@@ -147,9 +150,5 @@ Generate the JSON blueprint now:
 async def list_section_types():
     """Returns the available V2 landing page section types."""
     return {
-        "section_types": [
-            "HERO", "ABOUT", "GALLERY", "FOOTER",
-            "VIDEO", "VISION", "BLOG", "TEAM",
-            "FAQ", "TESTIMONIALS", "CUSTOM", "RANKING",
-        ]
+        "section_types": list(catalog.GENERATABLE_SECTIONS)
     }

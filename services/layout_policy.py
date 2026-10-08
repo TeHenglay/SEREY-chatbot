@@ -79,6 +79,11 @@ def collect_rendered_upload_slots(layout_sections: list[dict[str, Any]]) -> list
         style, _ = normalize_style(section_type, section.get("style"))
         section_lower = section_type.lower()
         for field in get_rendered_fields(section_type, style):
+            # Product galleries render the community's shop products (ProductSection),
+            # never uploaded images[] — asking for those uploads would be a dead end.
+            # Mirrors isImageFieldRenderable() in LandingBuilderV2.js.
+            if section_type == "GALLERY" and field == "images" and section.get("section_subtype") == "product":
+                continue
             if field in _ARRAY_FIELD_IMAGE_KEY:
                 image_field = _ARRAY_FIELD_IMAGE_KEY[field]
                 for idx, item in enumerate(section.get(field) or []):

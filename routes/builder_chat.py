@@ -7,19 +7,24 @@ import asyncio
 from copy import deepcopy
 from fastapi import APIRouter, HTTPException, Header, Depends
 from services.security import require_serey_origin
-from schemas.chat import ChatRequest, BuilderChatResponse, BuilderUsage, UploadNeeded
+from schemas.chat import (
+    BuilderChatRequest, ChatRequest, BuilderChatResponse, BuilderUsage, GeneratedImage, UploadNeeded,
+)
 from schemas.blueprint import PageBlueprint, PatchCommand
 from services import grok
+from services import image_gen
 from services import design_guidelines as design
 from services import section_catalog as catalog
 from services.layout_policy import (
     collect_rendered_upload_slots,
     compare_with_backend_map,
     derive_uploads_needed,
+    get_rendered_fields,
     normalize_section_type,
     normalize_style,
     parse_frontend_style_map,
 )
+from services.blueprint_validator import existing_section_types, sanitize_content, sanitize_patch
 from services.memory import append_session_turn, get_session_history_prompt
 import json
 import logging
@@ -32,6 +37,20 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _CHAT_API_KEY = os.getenv("CHAT_API_KEY", "")
+
+# serey-api's builder proxy aborts after 120s (BUILDER_TIMEOUT_MS); anything we
+# generate after that is billed by xAI and thrown away. Keep a margin under it.
+_BUILDER_TIME_BUDGET_S = float(os.getenv("BUILDER_TIME_BUDGET_S", "110"))
+# A re-generation is only attempted if at least this much budget is left.
+_MIN_RETRY_BUDGET_S = 30.0
+_RETRY_NOTE_INVALID_JSON = (
+    "\n\nIMPORTANT: your previous answer was not valid JSON. Reply with ONE valid JSON "
+    "object only — no prose before or after it, no markdown fences."
+)
+_RETRY_NOTE_TRUNCATED = (
+    "\n\nIMPORTANT: your previous answer was cut off because it was too long. Reply with "
+    "ONE valid JSON object and keep it shorter: concise copy, no optional fields."
+)
 
 # ---------------------------------------------------------------------------
 # Per-session previous page state — powers partial undo ("undo the color
@@ -282,6 +301,223 @@ def _set_last_change_color_only(session_id: str, color_only: bool) -> None:
         oldest = min(_last_change_color_only, key=lambda k: _last_change_color_only[k][0])
         _last_change_color_only.pop(oldest, None)
     _last_change_color_only[session_id] = (time.time(), color_only)
+
+
+# ---------------------------------------------------------------------------
+# Reply language — Bob speaks Dutch to Dutch users (Netherlands IP, or the
+# site language set to 'nl') until they ask for English. An explicit switch is
+# remembered per session here rather than trusted to the 10-turn history window.
+# Only Bob's chat reply follows this; page copy follows the user's own input.
+# ---------------------------------------------------------------------------
+
+_DUTCH_COUNTRY_CODES = {"NL"}
+# A bare "in English" is NOT a switch: "write my about section in English" is about
+# page copy, not about how Bob talks.
+_TO_ENGLISH_RE = re.compile(
+    r"\b(speak|talk|reply|respond|answer|chat|switch|continue|spreek|praat|antwoord)\b[^.?!]{0,30}\b(english|engels)\b"
+    r"|\b(english|engels)\b[^.?!]{0,15}\b(please|pls|plz|graag|alsjeblieft|aub)\b"
+    r"|^\s*(english|engels)\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+_TO_DUTCH_RE = re.compile(
+    r"\b(speak|talk|reply|respond|answer|chat|switch|continue|spreek|praat|antwoord)\b[^.?!]{0,30}\b(dutch|nederlands)\b"
+    r"|\b(dutch|nederlands)\b[^.?!]{0,15}\b(please|pls|plz|graag|alsjeblieft|aub)\b"
+    r"|^\s*(dutch|nederlands)\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+_language_override: dict[str, tuple[float, str]] = {}
+
+
+def _requested_language(message: str) -> str | None:
+    """'en' / 'nl' when the message explicitly asks Bob to switch language."""
+    if not message:
+        return None
+    wants_en = bool(_TO_ENGLISH_RE.search(message))
+    wants_nl = bool(_TO_DUTCH_RE.search(message))
+    if wants_en == wants_nl:  # neither, or ambiguous ("translate English to Dutch")
+        return None
+    return "en" if wants_en else "nl"
+
+
+# Site languages that pin Bob's reply language. Any other selector value
+# (kh, ru, es, …) leaves the model replying in the language the user types.
+_SELECTOR_LANGUAGES = {"nl": "nl", "en": "en"}
+_last_site_language: dict[str, str] = {}
+
+
+def _remember_session_value(store: dict, session_id: str, value) -> None:
+    if len(store) >= _PREV_CONTEXT_MAX_SESSIONS and session_id not in store:
+        oldest = min(store, key=lambda k: store[k][0])
+        store.pop(oldest, None)
+    store[session_id] = (time.time(), value)
+
+
+def _resolve_reply_language(request: ChatRequest) -> str | None:
+    """Which language Bob replies in; None = follow the language the user types.
+
+    The site's language selector is the source of truth, so switching it to EN
+    or NL switches Bob immediately. Order:
+      1. an explicit request typed in this message ("speak English")
+      2. a typed request earlier this session — unless the selector changed
+         since, because the newer selector switch wins
+      3. the selector (site_language): nl → Dutch, en → English
+      4. no selector value sent (older clients): Dutch for a Netherlands IP
+    """
+    session_id = request.session_id
+    site = (request.site_language or "").strip().lower()
+    previous_site = _last_site_language.get(session_id, (0, None))[1]
+    if site:
+        if previous_site is not None and site != previous_site:
+            _language_override.pop(session_id, None)
+        _remember_session_value(_last_site_language, session_id, site)
+
+    requested = _requested_language(request.message)
+    if requested:
+        _remember_session_value(_language_override, session_id, requested)
+        return requested
+    entry = _language_override.get(session_id)
+    if entry and time.time() - entry[0] <= _PREV_CONTEXT_TTL_SECS:
+        return entry[1]
+    if site:
+        return _SELECTOR_LANGUAGES.get(site)
+    if (request.country_code or "").strip().upper() in _DUTCH_COUNTRY_CODES:
+        return "nl"
+    return None
+
+
+def _reply_language_directive(lang: str | None) -> str:
+    if lang == "nl":
+        # A bare "reply in Dutch" gives word-for-word calques of English sentence
+        # structure — grammatical but foreign-sounding. Naming the audience and
+        # forbidding mirrored structure fixed the same problem in routes/summarize.py.
+        return (
+            "REPLY LANGUAGE: Dutch (Nederlands). Write the \"reply\" text in Dutch, whatever "
+            "language the user types in, unless they explicitly ask for another language.\n"
+            "Write it the way a native Dutch speaker would chat with a Dutch customer — not a "
+            "translation of an English sentence. Use natural Dutch word order and idiom and "
+            "re-express each idea instead of mirroring English structure. Tone: informal 'je/jij' "
+            "(never 'u'), warm but down-to-earth and to the point, short sentences. No over-the-top "
+            "enthusiasm (no 'Geweldig!' / 'Fantastisch!' openers) and no anglicisms where a common "
+            "Dutch word exists — but keep web terms Dutch people actually use (website, homepage, "
+            "footer, layout, upload). Example of the register: \"Ik heb een FAQ toegevoegd met de "
+            "vragen die klanten het vaakst stellen. Wil je er nog een paar bij?\"\n"
+            "This applies ONLY to your chat reply — page copy (titles, descriptions, items) still "
+            "follows the language the user writes their business details in.\n\n"
+        )
+    if lang == "en":
+        return (
+            "REPLY LANGUAGE: English — the user chose English. Write the \"reply\" text in English, "
+            "whatever language they type in. Page copy still follows the language of their "
+            "business details.\n\n"
+        )
+    return ""
+
+
+def _revert_reply(message: str, lang: str | None, *, apologetic: bool = True) -> str:
+    """Canned reply for deterministic reverts (no model call), in the user's language."""
+    if _KHMER_CHAR_RE.search(message or ""):
+        return (
+            "គ្មានបញ្ហាទេ — ខ្ញុំបានដាក់ទំព័ររបស់អ្នកត្រឡប់ទៅដូចមុនវិញហើយ។ និយាយម្តងទៀតដើម្បីត្រឡប់ក្រោយមួយជំហានទៀត។"
+            if apologetic
+            else "ខ្ញុំបានដាក់ទំព័ររបស់អ្នកត្រឡប់ទៅដូចមុនវិញហើយ។ និយាយម្តងទៀតដើម្បីត្រឡប់ក្រោយមួយជំហានទៀត។"
+        )
+    if lang == "nl":
+        prefix = "Geen probleem! " if apologetic else ""
+        return f"{prefix}Je pagina staat weer zoals hij was. Zeg het nog een keer als je nog een stap terug wilt."
+    prefix = "No problem — I've" if apologetic else "I've"
+    return f"{prefix} put your page back to how it was before. Say it again to go back another step."
+
+
+# ---------------------------------------------------------------------------
+# First-build image fill — when the onboarding intake arrives with NO user
+# images, the hero and about photos are generated (services/image_gen.py) so
+# the page keeps the template's image layouts instead of text-only fallbacks.
+# Only the key slots, only once: everything else stays upload / ask-first.
+# The temporary image URLs are made permanent by the Next.js builder proxy.
+# ---------------------------------------------------------------------------
+
+_AUTO_IMAGES_ENABLED = os.getenv("BUILDER_AUTO_IMAGES", "true").strip().lower() in ("1", "true", "yes")
+_ONBOARDING_FINAL_RE = re.compile(r"guided multi-step flow[\s\S]*Current phase:\s*final", re.IGNORECASE)
+# Any image the user supplied during onboarding (uploads, banner/logo lines, chat attachments).
+_USER_IMAGE_RE = re.compile(
+    r"https?://\S+\.(?:png|jpe?g|webp|gif|avif|heic)\b|https?://(?:storage|upload)\.serey\.io/\S+|\[image:",
+    re.IGNORECASE,
+)
+# (section, field, image style to switch to when the AI's chosen style renders no image)
+_AUTO_IMAGE_SLOTS = (("HERO", "image_url", 1), ("ABOUT", "image_url", 8))
+_MIN_IMAGE_BUDGET_S = 20.0
+
+
+def _wants_auto_images(message: str) -> bool:
+    return (
+        _AUTO_IMAGES_ENABLED
+        and bool(_ONBOARDING_FINAL_RE.search(message or ""))
+        and not _USER_IMAGE_RE.search(message or "")
+    )
+
+
+def _fallback_image_prompt(section: dict[str, Any], slot_type: str) -> str:
+    """Used when the builder model returned no image_prompts entry."""
+    context = " ".join(
+        str(section.get(k) or "") for k in ("title", "subtitle", "description")
+    ).strip()[:400]
+    role = "wide hero banner" if slot_type == "HERO" else "about-section photo"
+    return f"Atmospheric {role} for the website of this business: {context}."
+
+
+async def _auto_fill_key_images(
+    raw_blueprint: dict[str, Any],
+    image_prompts: Any,
+    deadline: float,
+) -> list[GeneratedImage]:
+    """Generate the empty hero/about photos in parallel and place them in the
+    blueprint. A section is switched to an image layout ONLY when its image
+    arrived, so a failed generation leaves the AI's text-led layout intact."""
+    remaining = deadline - time.monotonic()
+    if remaining < _MIN_IMAGE_BUDGET_S:
+        logger.warning("Skipping first-build images: only %.0fs of budget left", remaining)
+        return []
+    prompts = image_prompts if isinstance(image_prompts, dict) else {}
+    jobs: list[tuple[dict[str, Any], str, str, int, str]] = []
+    claimed: set[str] = set()
+    for section in raw_blueprint.get("content") or []:
+        stype = normalize_section_type(section.get("type"))
+        for slot_type, field, image_style in _AUTO_IMAGE_SLOTS:
+            if stype != slot_type or slot_type in claimed or section.get("is_hidden"):
+                continue
+            claimed.add(slot_type)  # first visible instance only
+            if str(section.get(field) or "").strip():
+                continue  # already has an image (echoed user upload)
+            prompt = str(prompts.get(slot_type.lower()) or "").strip() or _fallback_image_prompt(section, slot_type)
+            jobs.append((section, stype, field, image_style, prompt))
+    if not jobs:
+        return []
+
+    timeout = min(image_gen.IMAGE_TIMEOUT_S, remaining - 5)
+    results = await asyncio.gather(
+        *(asyncio.to_thread(image_gen.generate_image, prompt, "16:9", timeout) for *_, prompt in jobs),
+        return_exceptions=True,
+    )
+    generated: list[GeneratedImage] = []
+    for (section, stype, field, image_style, prompt), result in zip(jobs, results):
+        if isinstance(result, BaseException):
+            logger.warning("First-build %s image failed: %s", stype, result)
+            continue
+        fallback_style = int(section.get("style") or 1)
+        if field not in get_rendered_fields(stype, fallback_style):
+            section["style"] = image_style
+        section[field] = result
+        generated.append(GeneratedImage(
+            section=stype.lower(),
+            field=field,
+            url=result,
+            instance_key=section.get("instance_key") or None,
+            style=int(section["style"]),
+            fallback_style=fallback_style,
+            prompt=prompt,
+        ))
+    logger.info("First-build images: %d/%d generated", len(generated), len(jobs))
+    return generated
 
 
 def _last_change_was_color_only(session_id: str) -> bool:
@@ -617,14 +853,19 @@ Map the labeled intake fields to the blueprint like this:
   - "Contact information:" → footer contact fields. "Logo: <url>" → footer logo_url.
   - "Banner images:" URLs → hero image_url (or bg_image_url for a background-image look).
   - "Additional images:" URLs → distribute across image slots the chosen styles actually render
-    (about, custom, gallery, team...) — use every provided image somewhere sensible if possible.
+    (about, gallery, team...) — use every provided image somewhere sensible if possible.
   - "Additional section content provided by user:" labeled lines map to their sections:
     TESTIMONIALS: → testimonial_items[] (parse names, roles, quotes from the text),
     FAQ: → faq_items[] ({{question, answer}}), TEAM: → members[] (names + roles),
     VISION: → the vision section's copy, SUBSCRIPTION: → the type-13 section's copy,
-    CUSTOM:/RANKING: → those sections. The user's real content beats anything you would write —
+    RANKING: → that section. The user's real content beats anything you would write —
     use it verbatim (grammar polish only). Sections in the order list WITHOUT a labeled block get
     AI-written content per the copywriting rules.
+  - IMAGE PROMPTS (final intake only): also return a top-level "image_prompts" object:
+    {{"hero": "...", "about": "..."}} — one or two English sentences each describing a photo that fits
+    THIS business (its real place, craft, products or atmosphere) and the page's palette mood. If the
+    user uploaded no images, these become the hero and about photos automatically. Describe scenes
+    with hands, objects and places — never faces, text, signs or logos.
 The intake asks for a visual identity DIFFERENT from the template default: keep the given structure
 exactly, then apply ONE design recipe end-to-end for the look (palette, font pairing, styles, animation).
 
@@ -646,9 +887,9 @@ These separate a 10x page from a template — apply them to every full build:
   2. BOOKENDS: hero and footer share the same dark tone (or the palette's hero_bg); everything
      between stays light. The page should feel framed.
   3. DENSITY CONTRAST: after a dense section (grid gallery, team grid, FAQ) place a spacious one
-     (text-only about, big quote testimonial, custom banner). Never stack two dense grids.
+     (text-only about, big quote testimonial, subscription panel). Never stack two dense grids.
   4. ONE ACCENT MOMENT: exactly one section mid-page may use the accent color as a large fill
-     (custom style 4 banner, about style 1 panel, or subscription style 3 split panel) — this is the page's
+     (about style 1 panel or subscription style 3 split panel) — this is the page's
      call-to-action moment. More than one large accent fill cheapens it.
   5. IMAGE SHAPES: pick ONE image_shape and use it consistently — 'arch' for artisan/organic,
      'circle' for people/community, 'rounded' for tech/premium, 'blob' for playful, square/default
@@ -697,7 +938,7 @@ HERO STYLE VARIETY — CRITICAL:
   Tech/SaaS:         HERO, ABOUT, GALLERY, VISION, FAQ, TESTIMONIALS, FOOTER
   Education:         HERO, ABOUT, BLOG, TEAM, FAQ, FOOTER
   Photography:       HERO, GALLERY, ABOUT, FOOTER
-  Professional Svc:  HERO, ABOUT, TEAM, FAQ, CUSTOM, FOOTER
+  Professional Svc:  HERO, ABOUT, TEAM, FAQ, TESTIMONIALS, FOOTER
 
 == RESPONSE FORMAT ==
 You MUST always return ONLY valid JSON matching this exact envelope:
@@ -729,8 +970,11 @@ You MUST always return ONLY valid JSON matching this exact envelope:
       {{ "type": 4, "instance_key": "footer", "style": 1, "is_hidden": false, "bg_image_url": "", "bg_image_opacity": 0.5, "title": "Contact Us", ... }}
     ]
   }},
-  "patches": null
+  "patches": null,
+  "image_prompts": {{ "hero": "Hands shaping a speckled clay mug on a potter's wheel in a riverside workshop, warm amber evening light", "about": "Handmade mugs and celadon bowls on a rustic wooden shelf beside a window" }}
 }}
+  image_prompts: REQUIRED on the onboarding FINAL intake (see GUIDED ONBOARDING INTAKE), describing
+  photos of THIS business; omit it on every other response.
 
   animation_style options: {animation_options}
   Pick the animation that matches the brand tone (fade for minimal, slide-up for bold, slide-left for tech/editorial, blur for luxury, none for ultra-minimal).
@@ -774,12 +1018,17 @@ OR when just answering a question (no layout change):
 }}
 
 == COMMUNICATION RULES ==
-- Always reply in plain, friendly conversational text. Never use markdown: no asterisks, no bullet points, no bold (**text**), no headers (##), no backticks.
+- Reply in friendly conversational text. The chat renders LIGHT markdown only: use **bold** for
+  section names and for titles you suggest (e.g. **Hero**, how about **Fresh from the Kiln**?), and
+  "- " bullets ONLY when you list 2 or more changes. Never use headers (##), tables, code or backticks.
 - Reply in the user's language: if they write in Khmer, reply in Khmer; English in, English out.
+  EXCEPTION: when the request contains a "REPLY LANGUAGE:" line, write the reply in that language —
+  it wins over the language the user typed in.
 - Be direct and action-first. When the user asks to add, change, or redesign anything — DO IT immediately. Return the blueprint or patches in the same response. Do not ask for permission or confirmation first.
 - Never ask for clarification if page_context is provided or the request is specific enough to act on. Only ask questions if the user says something completely open-ended with zero context (e.g. literally just "build a page" with no community info at all).
 - Do not explain what you are about to do. Just do it and briefly describe what you did in the reply.
-- REPLY QUALITY: 2-4 sentences. Name the 2-3 concrete design decisions you made in plain words
+- REPLY QUALITY: short — it shows in a small chat panel. 2-3 short sentences (or a short bullet list
+  for multiple changes). Name the 2-3 concrete design decisions you made in plain words
   ("I went with a warm amber palette, a serif headline font and a polaroid-style gallery") — never
   recite style numbers, hex codes, or field names at the user. End with ONE specific, actionable
   suggestion for the next step ("Want me to add a FAQ for your delivery questions?"), not a generic
@@ -788,7 +1037,8 @@ OR when just answering a question (no layout change):
   exactly what you changed — never apologize without acting.
 
 == RULES ==
-1. Always return ONLY valid JSON — no markdown, no backticks, no text outside the JSON.
+1. Always return ONLY valid JSON — no code fences around it, no text outside the JSON (light
+   markdown INSIDE the "reply" string is fine, see COMMUNICATION RULES).
 2. Always include HERO at top and FOOTER at bottom in any full blueprint.
 3. Set blueprint.community_id to the COMMUNITY ID provided in context (REQUIRED — use the exact integer).
 4. IMAGES — STRICT RULES (never break these):
@@ -796,15 +1046,17 @@ OR when just answering a question (no layout change):
    - Always set image_url, logo_url, and ALL image fields to "" in every blueprint section you create.
    - The ONLY exception: if page_context shows an existing image_url marked as ALREADY UPLOADED,
      copy that exact URL — never overwrite it with "".
-   - EQUALLY VALID: https://upload.serey.io/... URLs the USER's message provides under "Banner
+   - EQUALLY VALID: Serey upload URLs (https://upload.serey.io/..., https://storage.serey.io/... or
+     any other *.serey.io host) that the USER's message provides under "Banner
      images:", "Additional images:", "Logo:", or "[image: ...]" markers are user-uploaded images —
      treat them exactly like ALREADY UPLOADED: copy them verbatim into the most suitable image
      fields (see GUIDED ONBOARDING INTAKE) and do NOT list slots filled this way in uploads_needed.
      URLs from any other domain are still banned — leave those fields "".
-   - If a section needs an image, set the field to "" and include it in uploads_needed so the user
-     can upload via the upload flow.
-5. If the user is vague (e.g. "build my page"), set blueprint to null and ask guiding questions
+   - If a section needs an image, set the field to "" — the user is prompted to upload it (rule 9).
+5. Only when the request has NO usable context at all (no page_context, no community or business
+   details — e.g. literally just "build my page"), set blueprint to null and ask guiding questions
    like: "What kind of community is this? What's the main goal? Do you prefer a bold or minimal look?"
+   In every other case act immediately (see COMMUNICATION).
 6. Use patches (not a full blueprint) when the user asks to change a specific thing (title, color, style).
    When user asks to change styles across the whole page ("choose different styles", "refresh the layout", "change all styles"):
    → Send update_block patches for EVERY visible section including HERO and FOOTER. Never skip HERO in style changes.
@@ -813,30 +1065,27 @@ OR when just answering a question (no layout change):
      leave its style untouched and vary the other sections instead.
 7. Pick styles intelligently based on the user's described vibe. Only use style numbers from each
    section's allowed list in the SECTION REGISTRY — anything else gets clamped to the default.
-8. Leave BLOG and RANKING sections with only title/description — their data is auto-fetched.
-   BLOG also accepts feed_type: "trending" (default) or "latest".
+8. Leave BLOG, NOTES and RANKING sections with only title/description — their data is auto-fetched.
+   BLOG and NOTES also accept feed_type: "trending" (default) or "latest".
    For FOOTER social_links, always use object format: [{{"type": "facebook", "handle": "pagename"}}]
    Never use plain strings like ["facebook.com/pagename"].
    FAQ items use {{question, answer}} keys. Testimonial items use {{name, role, content, image_url}} keys.
-9. IMAGES: Whenever you create or update a section with image fields, always include "uploads_needed"
-   in your JSON response. Rules:
-   - "section" = section type in lowercase (e.g. "hero", "gallery", "about", "team", "custom", "testimonials")
+9. IMAGES / uploads_needed: on a full blueprint the server derives upload prompts from the final
+   layout itself — set "uploads_needed": null there. On patches (add_block / update_block) that add
+   or change image fields, list those slots in "uploads_needed". Rules:
+   - "section" = section type in lowercase (e.g. "hero", "gallery", "about", "team", "testimonials")
    - "field"   = exact field name (e.g. "image_url", "images", "members", "testimonial_items")
    - "index"   = integer ONLY for array fields (images[], members[], testimonial_items[]). Omit for simple image_url fields.
    - "label"   = friendly user-facing label (e.g. "Product 1 — Image", "Hero Background")
    Examples:
      {{ "section": "hero",         "field": "image_url",            "label": "Hero Background" }}
      {{ "section": "about",        "field": "image_url",            "label": "About Section Image" }}
-     {{ "section": "custom",       "field": "image_url",            "label": "Custom Section Image" }}
-     {{ "section": "custom",       "field": "image_url_2",          "label": "Custom Section Image 2" }}
      {{ "section": "gallery",      "field": "images",    "index": 0, "label": "Product 1 — Image" }}
      {{ "section": "team",         "field": "members",   "index": 0, "label": "Team Member 1 Photo" }}
      {{ "section": "testimonials", "field": "testimonial_items", "index": 0, "label": "Reviewer 1 Avatar" }}
    If no image fields are affected, set "uploads_needed": null.
    Do not request uploads for image slots the chosen style does not render (e.g. hero style 3,
-   about styles 4/6, testimonials style 7).
-   On a full redesign (blueprint), ALWAYS include uploads_needed for every section that has image
-   fields — even if page_context had images before. New layout = new upload prompts.
+   about styles 1/4/9, testimonials style 7).
 10. DUPLICATE SECTIONS: You may include multiple instances of the same type (e.g. two FAQ sections).
     Assign unique instance_key values: first instance = the bare base name (e.g. "faq"); each
     additional instance uses a DOUBLE underscore suffix: "faq__2", "faq__3". Never use "{{name}}_1".
@@ -920,8 +1169,10 @@ BUILDER_SYSTEM_PROMPT = _build_system_prompt()
 
 
 @router.post("/builder/chat", response_model=BuilderChatResponse, dependencies=[Depends(require_serey_origin), Depends(_verify_api_key)])
-async def builder_chat(request: ChatRequest):
+async def builder_chat(request: BuilderChatRequest):
     logger.info("Model: %s | user=%s session=%s community=%s", grok.BUILDER_MODEL, request.user_id, request.session_id, request.community_id)
+    # Resolved before the no-model revert path so its canned reply is localized too.
+    reply_language = _resolve_reply_language(request)
 
     # 0. Full-undo requests are deterministic — no model call. The frontend keeps
     # the real page history; revert=True tells it to restore its last snapshot.
@@ -935,11 +1186,7 @@ async def builder_chat(request: ChatRequest):
     )
     if request.page_context and (_is_full_undo(request.message) or wants_old_colors):
         logger.info("Full-undo intent detected — returning revert=True without model call")
-        reply = (
-            "គ្មានបញ្ហាទេ — ខ្ញុំបានដាក់ទំព័ររបស់អ្នកត្រឡប់ទៅដូចមុនវិញហើយ។ និយាយម្តងទៀតដើម្បីត្រឡប់ក្រោយមួយជំហានទៀត។"
-            if _KHMER_CHAR_RE.search(request.message or "")
-            else "No problem — I've put your page back to how it was before. Say it again to go back another step."
-        )
+        reply = _revert_reply(request.message, reply_language)
         try:
             append_session_turn(
                 session_id=request.session_id,
@@ -1005,16 +1252,18 @@ async def builder_chat(request: ChatRequest):
 
 ---
 
-USER: {request.message}
+{_reply_language_directive(reply_language)}USER: {request.message}
 
 Respond with valid JSON now:
 """
 
-    # 3. Call Grok — retry once on malformed JSON
+    # 3. Call Grok — re-generate once on unusable output, if the budget allows
     data = None
-    # Token counts of the call that actually produced the answer. A retried
-    # attempt overwrites these, so what is reported is what was kept.
-    token_counts: dict[str, int] = {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0}
+    # Summed across EVERY billed attempt (a failed parse still cost tokens);
+    # serey-api settles credits from these.
+    token_counts: dict[str, int] = grok.empty_usage()
+    deadline = time.monotonic() + _BUILDER_TIME_BUDGET_S
+    prompt_for_attempt = full_prompt
     def _clean_raw(raw: str) -> str:
         """Strip markdown code fences the model sometimes wraps around JSON."""
         stripped = raw.strip()
@@ -1026,13 +1275,18 @@ Respond with valid JSON now:
 
     for attempt in (1, 2):
         raw_response = ""
+        remaining = deadline - time.monotonic()
         try:
-            raw_response, token_counts = await asyncio.to_thread(
-                grok.generate_builder_with_usage, full_prompt, BUILDER_SYSTEM_PROMPT
+            raw_response, counts = await asyncio.to_thread(
+                grok.generate_builder_with_usage,
+                prompt_for_attempt,
+                BUILDER_SYSTEM_PROMPT,
+                min(grok.BUILDER_CALL_TIMEOUT_S, remaining),
             )
+            token_counts = grok.add_usage(token_counts, counts)
             cleaned = _clean_raw(raw_response)
             if not cleaned:
-                raise ValueError("Model returned empty content after fence stripping")
+                raise grok.UnusableBuilderOutput("empty after fence stripping", raw_response, grok.empty_usage())
             # If model returned plain text instead of JSON, try to salvage an
             # embedded JSON envelope (models sometimes echo the reply as prose
             # BEFORE the JSON); otherwise wrap the text as a reply-only envelope.
@@ -1062,14 +1316,23 @@ Respond with valid JSON now:
                 data, _end = json.JSONDecoder().raw_decode(cleaned)
                 logger.warning("Model appended prose after JSON — ignored trailing text")
             break
-        except json.JSONDecodeError as e:
-            logger.error("JSON parse error (attempt %d): %s | Raw: %s", attempt, str(e), raw_response[:600])
-            if attempt == 2:
-                raise HTTPException(status_code=422, detail=f"AI returned malformed JSON after retry: {str(e)}")
+        except (json.JSONDecodeError, grok.UnusableBuilderOutput) as e:
+            if isinstance(e, grok.UnusableBuilderOutput):
+                token_counts = grok.add_usage(token_counts, e.counts)
+                raw_response = e.text or raw_response
+            logger.error("Unusable builder output (attempt %d): %s | Raw: %s", attempt, str(e), raw_response[:600])
+            # Only re-generate if a second full answer can still beat the proxy timeout.
+            if attempt == 2 or deadline - time.monotonic() < _MIN_RETRY_BUDGET_S:
+                raise HTTPException(status_code=422, detail=f"AI returned unusable output: {str(e)}")
+            truncated = isinstance(e, grok.UnusableBuilderOutput) and "truncated" in e.reason
+            prompt_for_attempt = full_prompt + (
+                _RETRY_NOTE_TRUNCATED if truncated else _RETRY_NOTE_INVALID_JSON
+            )
         except Exception as e:
+            # Transient API errors were already retried inside grok; retrying
+            # here again would only stack timeouts past the proxy budget.
             logger.error("Grok error (attempt %d): %s", attempt, str(e))
-            if attempt == 2:
-                raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
+            raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
     if data is None:
         raise HTTPException(status_code=502, detail="AI service returned no data")
     assert isinstance(data, dict)  # type: narrowing for static analysis
@@ -1095,6 +1358,9 @@ Respond with valid JSON now:
         anim = str(raw.get("animation_style") or "fade").lower()
         raw["animation_style"] = anim if anim in _VALID_ANIMATIONS else "fade"
         raw.setdefault("template", 1)
+        # The model sometimes omits it; the request always knows the community
+        if raw.get("community_id") in (None, ""):
+            raw["community_id"] = request.community_id
         raw.setdefault("font", "")
         # Fonts must come from the frontend whitelist; unknown fonts fall back to system default
         if raw.get("font") and raw["font"] not in catalog.FONT_OPTIONS:
@@ -1102,8 +1368,14 @@ Respond with valid JSON now:
             raw["font"] = ""
 
         page_context_text = request.page_context or ""
+        # Text the AI may legitimately echo URLs/scripts from: the page it was shown
+        # and what the user typed. Anything else is invented and gets scrubbed.
+        known_text = page_context_text + "\n" + (request.message or "")
 
-        for section in raw.get("content", []):
+        content = raw.get("content")
+        raw["content"] = [s for s in content if isinstance(s, dict)] if isinstance(content, list) else []
+
+        for section in raw["content"]:
             section_type = normalize_section_type(section.get("type"))
             if section_type:
                 section["type"] = section_type
@@ -1134,7 +1406,7 @@ Respond with valid JSON now:
                 if section.get("section_subtype") == "product" and section["style"] not in catalog.PRODUCT_SUBTYPE_STYLES:
                     logger.warning("Clamped product-subtype gallery style %s to 1", section["style"])
                     section["style"] = 1
-            if section_type == "BLOG" and section.get("feed_type"):
+            if section_type in ("BLOG", "NOTES") and section.get("feed_type"):
                 feed = str(section["feed_type"]).lower()
                 section["feed_type"] = "latest" if feed in ("new", "latest") else "trending"
             # Editor-managed features the AI must never author
@@ -1165,13 +1437,23 @@ Respond with valid JSON now:
             for link in section.get("social_links", []) or []:
                 if "platform" in link and "type" not in link:
                     link["type"] = link.pop("platform")
+        # Structure + safety pass: known types, one HERO/FOOTER (first/last),
+        # unique instance keys, no invented image URLs or embed scripts.
+        raw["content"] = sanitize_content(raw["content"], known_text)
         return raw
 
     # 5. Validate blueprint (if present)
     blueprint = None
+    generated_images: list[GeneratedImage] = []
     if raw_blueprint:
         try:
-            blueprint = PageBlueprint(**_normalize_blueprint(raw_blueprint))
+            normalized_blueprint = _normalize_blueprint(raw_blueprint)
+            # First build without any user images: generate the hero/about photos.
+            if _wants_auto_images(request.message):
+                generated_images = await _auto_fill_key_images(
+                    normalized_blueprint, data.get("image_prompts"), deadline
+                )
+            blueprint = PageBlueprint(**normalized_blueprint)
         except Exception as e:
             logger.error("Blueprint validation failed: %s | Data: %s", str(e), raw_blueprint)
             raise HTTPException(
@@ -1186,12 +1468,17 @@ Respond with valid JSON now:
     if raw_patches and isinstance(raw_patches, list):
         try:
             normalized = []
+            known_types = existing_section_types((page_context_obj or {}).get("content"))
+            patch_known_text = (request.page_context or "") + "\n" + (request.message or "")
             for p in raw_patches:
+                if not isinstance(p, dict):
+                    logger.warning("Dropped non-object patch entry: %.120r", p)
+                    continue
                 # AI sometimes uses { action, block/new_block: {type, ...} } instead of { action, type, updates }
                 raw_block = p.get("block") or p.get("new_block")
                 if raw_block and "type" not in p:
                     p = {
-                        "action": p["action"],
+                        "action": p.get("action"),
                         "type": raw_block.get("type", ""),
                         "updates": {k: v for k, v in raw_block.items() if k != "type"},
                     }
@@ -1239,14 +1526,17 @@ Respond with valid JSON now:
                                 normalized_style,
                             )
                         updates["style"] = normalized_style
-                normalized.append(p)
+                p = sanitize_patch(p, known_types, patch_known_text)
+                if p is not None:
+                    normalized.append(p)
             normalized_patch_dicts = normalized
-            patches = [PatchCommand(**p) for p in normalized_patch_dicts]
+            # Every patch dropped by validation -> no patches at all (None, not [])
+            patches = [PatchCommand(**p) for p in normalized_patch_dicts] or None
         except Exception as e:
             logger.error("Patches validation failed: %s | Data: %s", str(e), raw_patches)
             raise HTTPException(
                 status_code=422,
-                detail=f"AI returned invalid patch structure: {str(e)} | Raw patches: {raw_patches}",
+                detail=f"AI returned invalid patch structure: {str(e)}",
             )
 
     # Safety net: the user asked to undo but the model produced no change at all —
@@ -1265,11 +1555,7 @@ Respond with valid JSON now:
     if request.page_context and explicit_undo and blueprint is None and not patches:
         logger.warning("Undo intent produced no patches — falling back to revert=True")
         revert_fallback = True
-        reply = (
-            "ខ្ញុំបានដាក់ទំព័ររបស់អ្នកត្រឡប់ទៅដូចមុនវិញហើយ។ និយាយម្តងទៀតដើម្បីត្រឡប់ក្រោយមួយជំហានទៀត។"
-            if _KHMER_CHAR_RE.search(_msg)
-            else "I've put your page back to how it was before. Say it again to go back another step."
-        )
+        reply = _revert_reply(_msg, reply_language, apologetic=False)
 
     final_layout = _derive_final_layout(blueprint, patches, page_context_obj)
     style_reasons = _extract_style_reasons(raw_blueprint, normalized_patch_dicts)
@@ -1336,12 +1622,14 @@ Respond with valid JSON now:
             outcome=outcome,
             vision_used=vision_used,
             model=grok.BUILDER_MODEL,
+            images_generated=len(generated_images),
             **token_counts,
         ),
         blueprint=blueprint,
         patches=patches,
         uploads_needed=uploads_needed,
         styles_selected=styles_selected,
+        generated_images=generated_images or None,
         user_id=request.user_id,
         session_id=request.session_id,
     )

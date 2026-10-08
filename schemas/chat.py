@@ -50,6 +50,30 @@ class ChatRequest(BaseModel):
         default=None,
         description="Named flow to activate: 'post_guide' | 'community_discovery'",
     )
+    country_code: str | None = Field(
+        default=None,
+        description="Builder only: ISO country of the caller's IP (Cloudflare cf-ipcountry, added by the Next.js proxy). 'NL' makes Bob reply in Dutch.",
+        max_length=8,
+    )
+    site_language: str | None = Field(
+        default=None,
+        description="Builder only: the site language the user has selected (frontend global `language`, e.g. 'en', 'nl', 'kh'). 'nl' makes Bob reply in Dutch.",
+        max_length=8,
+    )
+
+
+class BuilderChatRequest(ChatRequest):
+    """Builder turns carry the frontend's onboarding intake prompt in `message`
+    (~14k chars for a typical shop, product/FAQ text uncapped), so the public
+    chat's 16k limit would 422 a large first build before the model is called.
+    The builder sits behind serey-api's credit proxy, so a higher cap is safe."""
+
+    message: str = Field(
+        ...,
+        description="The user's chat message (or the frontend's onboarding intake prompt)",
+        min_length=1,
+        max_length=40000,
+    )
 
 
 class ChatResponse(BaseModel):
@@ -69,7 +93,7 @@ class UploadNeeded(BaseModel):
 
 class StyleSelection(BaseModel):
     section: str = Field(..., description="Section type in lowercase")
-    instance_key: Optional[str] = Field(default=None, description="Unique key for duplicate instances, e.g. 'team_2'")
+    instance_key: Optional[str] = Field(default=None, description="Unique key for duplicate instances, e.g. 'team__2'")
     style: int = Field(..., description="Resolved style ID for this section")
     is_hidden: bool = Field(default=False, description="Whether the section is hidden")
     style_reason: Optional[str] = Field(
@@ -99,6 +123,27 @@ class BuilderUsage(BaseModel):
     cached_tokens: int = Field(default=0)
     completion_tokens: int = Field(default=0)
     model: Optional[str] = Field(default=None)
+    images_generated: int = Field(
+        default=0,
+        description="AI images generated this turn (first-build hero/about fill) — priced separately from tokens",
+    )
+
+
+class GeneratedImage(BaseModel):
+    """An AI image placed into the blueprint on a first build.
+
+    `url` is the image model's TEMPORARY link. The Next.js builder proxy
+    downloads it, uploads it to storage.serey.io and swaps the permanent URL
+    into the blueprint; if that fails it blanks the field and sets the section
+    back to `fallback_style` (the text-led layout the AI originally chose).
+    """
+    section: str = Field(..., description="Section type in lowercase, e.g. 'hero', 'about'")
+    field: str = Field(..., description="Image field filled, e.g. 'image_url'")
+    url: str = Field(..., description="Temporary image URL from the image model")
+    instance_key: Optional[str] = Field(default=None)
+    style: int = Field(..., description="Style the section was switched to so the image renders")
+    fallback_style: int = Field(..., description="Style to restore if the image cannot be stored")
+    prompt: str = Field(default="", description="Prompt the image was generated from")
 
 
 class BuilderChatResponse(BaseModel):
@@ -132,6 +177,10 @@ class BuilderChatResponse(BaseModel):
     patches: Optional[list[PatchCommand]] = Field(
         default=None,
         description="List of granular updates to apply to the existing blueprint without rewriting it entirely.",
+    )
+    generated_images: Optional[list[GeneratedImage]] = Field(
+        default=None,
+        description="First-build AI images placed in the blueprint (temporary URLs — the Next.js proxy stores them)",
     )
     user_id: str = Field(..., description="Echoed user_id for reference")
     session_id: str = Field(..., description="Echoed session_id for reference")
