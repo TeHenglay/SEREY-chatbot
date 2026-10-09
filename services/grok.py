@@ -12,6 +12,7 @@ from openai import (
     RateLimitError,
 )
 import os
+import threading
 import time
 import logging
 
@@ -290,22 +291,68 @@ async def stream_text(prompt: str, system: str | None = None):
                 raise
 
 
+# /health is polled every 2 min; a live Grok call each time was slow (reasoning
+# model) and paid, so the probe result is reused. Failures re-probe sooner.
+_STATUS_TTL_OK_S = 600
+_STATUS_TTL_FAIL_S = 120
+_STATUS_PROBE_TIMEOUT_S = 20.0
+_status_cache: tuple[float, dict] | None = None
+_status_lock = threading.Lock()
+
+
 def check_api_status() -> dict:
     """
     Returns {"reachable": bool, "quota_ok": bool, "reason": str | None}.
+    Cached result of _probe_api_status(); see the TTLs above.
+    """
+    global _status_cache
+
+    cached = _status_cache
+    if cached and time.monotonic() < cached[0]:
+        return cached[1]
+
+    # One probe at a time; concurrent callers get the stale result instead of waiting.
+    if not _status_lock.acquire(blocking=cached is None):
+        return cached[1]
+    try:
+        if _status_cache and time.monotonic() < _status_cache[0]:
+            return _status_cache[1]
+        status = _probe_api_status()
+        ok = status["reachable"] and status["quota_ok"]
+        ttl = _STATUS_TTL_OK_S if ok else _STATUS_TTL_FAIL_S
+        _status_cache = (time.monotonic() + ttl, status)
+        return status
+    finally:
+        _status_lock.release()
+
+
+def _probe_api_status() -> dict:
+    """
     Distinguishes quota exhaustion (429 rate-limit, or 403 credits/spending-limit)
     from other failures so callers can surface the difference — and a human-readable
     reason — in health/monitoring endpoints.
     """
-    from openai import RateLimitError
-
     if not os.getenv("GROK_API_KEY"):
         return {"reachable": False, "quota_ok": True, "reason": "GROK_API_KEY is not set"}
     try:
-        result = generate('Return this exact JSON: {"status": "connected"}')
+        # Single bounded attempt: the monitor gives up at 30s, so retries here only hide the cause.
+        client = _get_client().with_options(max_retries=0, timeout=_STATUS_PROBE_TIMEOUT_S)
+        response = client.chat.completions.create(
+            model=_GROK_MODEL,
+            messages=[{"role": "user", "content": 'Return this exact JSON: {"status": "connected"}'}],
+            temperature=0,
+        )
+        result = response.choices[0].message.content or ""
         ok = "connected" in result
         reason = None if ok else "Grok responded but health probe returned unexpected output"
         return {"reachable": ok, "quota_ok": True, "reason": reason}
+    except APITimeoutError:
+        logger.error("Grok health probe timed out after %ss", _STATUS_PROBE_TIMEOUT_S)
+        return {
+            "reachable": False,
+            "quota_ok": True,
+            "reason": f"Grok did not answer within {_STATUS_PROBE_TIMEOUT_S:.0f}s (xAI slow or unreachable)",
+        }
     except RateLimitError as e:
         msg = str(e)
         logger.error("Grok quota/rate-limit exceeded: %s", msg)
