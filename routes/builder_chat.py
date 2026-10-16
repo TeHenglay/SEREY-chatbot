@@ -14,6 +14,7 @@ from schemas.chat import (
 from schemas.blueprint import PageBlueprint, PatchCommand
 from services import grok
 from services import image_gen
+from services import map_embed
 from services import section_catalog as catalog
 from services.layout_policy import (
     collect_rendered_upload_slots,
@@ -485,6 +486,39 @@ def _revert_reply(message: str, lang: str | None, *, apologetic: bool = True) ->
         return f"{prefix}Je pagina staat weer zoals hij was. Zeg het nog een keer als je nog een stap terug wilt."
     prefix = "No problem — I've" if apologetic else "I've"
     return f"{prefix} put your page back to how it was before. Say it again to go back another step."
+
+
+def _nothing_changed_reply(lang: str | None, message: str) -> str:
+    """Reply when every change the model made was rejected, so nothing on the page changed."""
+    if _KHMER_CHAR_RE.search(message or ""):
+        return "សូមអភ័យទោស ខ្ញុំមិនអាចធ្វើការផ្លាស់ប្តូរនេះបានទេ ហើយទំព័ររបស់អ្នកនៅដដែល។ សូមប្រាប់ខ្ញុំឱ្យកាន់តែលម្អិត ឬសាកល្បងម្តងទៀត។"
+    if lang == "nl":
+        return ("Sorry, dat lukte me niet: er is niets op je pagina veranderd. Probeer het nog eens met wat meer "
+                "uitleg. Heb je eigen code (zoals een kaart), plak die dan zelf in een Custom Code-sectie.")
+    return ("Sorry, I couldn't make that change, so nothing on your page changed. Try again with a bit more detail. "
+            "If it's your own code (like a map), paste it into a Custom Code section yourself.")
+
+
+def _map_added_line(lang: str | None, message: str) -> str:
+    """Said when the server added the map section and Bob's reply didn't mention it."""
+    if _KHMER_CHAR_RE.search(message or ""):
+        return "ខ្ញុំបានបន្ថែមផ្នែកផែនទីពីតំណ Google Maps របស់អ្នក នៅខាងក្រោមទំព័រ ពីលើផ្នែកបាតទំព័រ។ អ្នកអាចអូសវាទៅកន្លែងផ្សេងនៅក្នុងកម្មវិធីកែ។"
+    if lang == "nl":
+        return ("Ik heb een kaartsectie met je Google Maps-link onderaan de pagina gezet, net boven de footer. "
+                "Je kunt hem in de editor naar een andere plek slepen.")
+    return ("I've added a map section from your Google Maps link at the bottom of the page, just above the footer. "
+            "You can drag it to another spot in the builder.")
+
+
+def _empty_code_section_note(lang: str | None, message: str) -> str:
+    """Added when Bob adds a Custom Code section without html — it shows nothing on the live page yet."""
+    if _KHMER_CHAR_RE.search(message or ""):
+        return "ចំណាំ៖ ផ្នែក Custom Code នៅទទេនៅឡើយ។ ចុចលើវានៅក្នុងកម្មវិធីកែ ហើយបិទភ្ជាប់ HTML របស់អ្នក។ វានឹងមិនបង្ហាញនៅលើគេហទំព័រផ្ទាល់ទេ រហូតដល់មានកូដ។"
+    if lang == "nl":
+        return ("Let op: de Custom Code-sectie is nog leeg. Klik erop in de editor en plak je HTML (bijvoorbeeld de "
+                "code van je kaart). Op je live pagina verschijnt er pas iets als er code in staat.")
+    return ("Note: the Custom Code section is empty for now. Click it in the editor and paste your HTML (for example "
+            "your map's code). Nothing shows on your live page until it has code.")
 
 
 # ---------------------------------------------------------------------------
@@ -1761,6 +1795,47 @@ def _code_block_adds_to_sections(
     return rest or None, raw_patches
 
 
+_MAP_LINK_NOTE = (
+    "\n\n(Service note — the user's message has a Google Maps link. The server adds a Custom Code section with "
+    "that map itself, after your answer. Do NOT add a map, iframe, Code section or code block for it, and don't "
+    "put the link anywhere else. Make any other change the user asked for. In your reply, say the map section "
+    "was added at the bottom of the page, just above the footer (even if they asked for another spot — you "
+    "can't place it), and that they can drag it where they want it in the builder.)"
+)
+_MAP_LINK_FAILED_NOTE = (
+    "\n\n(Service note — the user's message has a Google Maps link that can't be shown as a map (a route / "
+    "directions link, or a link that doesn't open a place). Do NOT add a map, iframe, Code section or code block. "
+    "Tell the user, and ask for a Google Maps link to one place, or a Google My Maps share link for a map with "
+    "several pins.)"
+)
+
+
+def _add_map_section(embed_url: str, raw_blueprint: Any, raw_patches: Any) -> tuple[Any, Any]:
+    """Put the server-built map section into the turn: before the footer in a full
+    page, else as an add_block patch. The model's own map attempts are dropped."""
+    section_html = map_embed.map_section_html(embed_url)
+    content = raw_blueprint.get("content") if isinstance(raw_blueprint, dict) else None
+    if isinstance(content, list):
+        content[:] = [s for s in content if not (isinstance(s, dict) and map_embed.is_map_html(s.get("html")))]
+        footer_at = next((i for i, s in enumerate(content)
+                          if isinstance(s, dict) and normalize_section_type(s.get("type")) == "FOOTER"), len(content))
+        content.insert(footer_at, {"type": catalog.CODE_SECTION_TYPE, "html": section_html})
+        return raw_blueprint, raw_patches
+    patches = [p for p in (raw_patches if isinstance(raw_patches, list) else [])
+               if not (isinstance(p, dict) and map_embed.is_map_html((p.get("updates") or {}).get("html")
+                                                                     if isinstance(p.get("updates"), dict) else None))]
+    patches.append({"action": "add_block", "type": catalog.CODE_SECTION_TYPE, "updates": {"html": section_html}})
+    return raw_blueprint, patches
+
+
+def _code_block_locked(page_context: str | None, block_id: str) -> bool:
+    """True when the page state lists this code block as LOCKED (its html was cut short)."""
+    for line in (page_context or "").splitlines():
+        if f'id "{block_id}"' in line:
+            return "LOCKED" in line
+    return False
+
+
 def _pass_code_blocks(raw: Any, page_context: str | None) -> list[dict[str, Any]] | None:
     """The model's code_blocks, passed through unchanged — the frontend applies
     and caps them (catalog `code_blocks` spec). Only non-object entries are
@@ -1791,6 +1866,13 @@ def _pass_code_blocks(raw: Any, page_context: str | None) -> list[dict[str, Any]
         block_id = entry.get("id")
         if action in ("update", "delete") and block_id and block_id not in (page_context or ""):
             logger.warning("code_blocks %s uses id %r that is not in the page state", action, block_id)
+        if action == "update" and block_id and "html" in entry and _code_block_locked(page_context, str(block_id)):
+            # The page state shows only the start of a long block (marked LOCKED by the
+            # frontend); html written from that would wipe the rest. Size changes still pass.
+            logger.warning("Dropped html of code_blocks update %r — the block is locked", block_id)
+            entry = {k: v for k, v in entry.items() if k != "html"}
+            if not entry.get("width") and not entry.get("height"):
+                continue
         blocks.append(entry)
     return blocks or None
 
@@ -2007,6 +2089,12 @@ async def builder_chat(request: BuilderChatRequest):
         build_theme = _chosen_theme(request.message)
         if build_theme:
             logger.info("Full build: theme from onboarding %r", build_theme["label"])
+    # A Google Maps link: the server builds the map section itself (services/map_embed.py),
+    # so Bob never writes map code it can't see or test.
+    map_links = map_embed.find_map_links(request.message)
+    map_embed_url = await map_embed.to_embed_url(map_links[0]) if map_links else None
+    if map_links:
+        full_build_note += _MAP_LINK_NOTE if map_embed_url else _MAP_LINK_FAILED_NOTE
     # A whole page gets more thinking and more creative freedom; small edits
     # stay fast and predictable on the model defaults.
     model_settings: dict[str, Any] = (
@@ -2196,6 +2284,8 @@ Respond with valid JSON now:
     # Bob writes HTML as Custom Code sections, not floating code blocks: turn
     # any code_blocks "add" into one (update/delete of existing blocks pass).
     raw_code_blocks, raw_patches = _code_block_adds_to_sections(raw_code_blocks, raw_blueprint, raw_patches)
+    if map_embed_url:
+        raw_blueprint, raw_patches = _add_map_section(map_embed_url, raw_blueprint, raw_patches)
 
     def _normalize_blueprint(raw: dict) -> dict:
         """Fix common AI field name mismatches before Pydantic validation."""
@@ -2458,6 +2548,29 @@ Respond with valid JSON now:
             except Exception:
                 logger.warning("Dropping malformed uploads_needed entry from model: %s", u)
         uploads_needed = echoed or None
+
+    # Keep the reply honest about what actually reaches the page. A tester was told
+    # "the map is added" when nothing appeared: the model's changes were all dropped
+    # by validation, or it added a Custom Code section with no html (shows nothing live).
+    model_tried_change = bool(raw_blueprint) or bool(raw_patches) or bool(raw_code_blocks)
+    if model_tried_change and blueprint is None and not patches and not code_blocks and not revert_fallback and not model_revert:
+        logger.warning("All of the model's page changes were dropped — replacing its reply")
+        reply = _nothing_changed_reply(reply_language, request.message)
+    elif any(
+        p.action == "add_block"
+        and normalize_section_type(p.type) == catalog.CODE_SECTION_TYPE
+        and not str((p.updates or {}).get("html") or "").strip()
+        for p in patches or []
+    ):
+        reply = f"{reply}\n\n{_empty_code_section_note(reply_language, request.message)}"
+    if map_embed_url:
+        map_added = any(map_embed.is_map_html((p.updates or {}).get("html")) for p in patches or []) or any(
+            map_embed.is_map_html(getattr(s, "html", None)) for s in (blueprint.content if blueprint else [])
+        )
+        if not map_added:
+            logger.warning("The map section did not survive validation")
+        elif not re.search(r"\bmap\b|kaart|ផែនទី", reply, re.IGNORECASE):
+            reply = f"{reply}\n\n{_map_added_line(reply_language, request.message)}".strip()
 
     # 7. Remember this turn's incoming page state for future undo requests.
     # Only turns that changed the page overwrite the stored snapshot, so a
