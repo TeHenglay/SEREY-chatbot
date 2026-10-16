@@ -19,6 +19,11 @@ _ARRAY_FIELD_IMAGE_KEY = {
 }
 
 
+# Other names the model uses for a section type (the frontend's resolveTypeKey
+# accepts "CODE" for the Custom Code section too).
+_TYPE_ALIASES = {"CODE": "CUSTOM", "CUSTOM_CODE": "CUSTOM", "CUSTOMCODE": "CUSTOM", "CODE_SECTION": "CUSTOM"}
+
+
 def normalize_section_type(section_type: Any) -> str:
     """Accepts string names ('HERO'), numeric IDs (1), or numeric strings ('1')."""
     if isinstance(section_type, int):
@@ -28,7 +33,8 @@ def normalize_section_type(section_type: Any) -> str:
     try:
         return SECTION_TYPE_ID_MAP.get(int(raw), raw.upper())
     except ValueError:
-        return raw.upper()
+        name = raw.upper().replace(" ", "_").replace("-", "_")
+        return _TYPE_ALIASES.get(name, name)
 
 
 def get_default_style(section_type: str) -> int:

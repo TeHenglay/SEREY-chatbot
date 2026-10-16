@@ -8,6 +8,7 @@
 #
 # Canonical section/style knowledge comes from services.section_catalog.
 
+import html as html_lib
 import json
 import logging
 import os
@@ -217,8 +218,29 @@ def _clean_image_url(value: Any, known_text: str) -> str:
     return ""
 
 
+# Fields that hold markup or code, not visitor-facing plain text
+_NON_TEXT_FIELDS = frozenset({"html", "kit_embed_script", "email_octopus_embed_script", "colors", "text_styles",
+                              "text_offsets", "mobile_overrides", "tablet_overrides"})
+
+
+def _unescape_text(value: Any) -> Any:
+    """Decode HTML entities in plain text, recursively. The section renderers
+    print text as-is, so "Ascend &amp; Conquer" showed the entity on the page."""
+    if isinstance(value, str):
+        return html_lib.unescape(value) if "&" in value else value
+    if isinstance(value, list):
+        return [_unescape_text(v) for v in value]
+    if isinstance(value, dict):
+        return {k: (v if k in _NON_TEXT_FIELDS else _unescape_text(v)) for k, v in value.items()}
+    return value
+
+
 def sanitize_section_fields(section: dict[str, Any], known_text: str) -> None:
     """In-place scrub of one section dict (or a patch's `updates`)."""
+    if normalize_section_type(section.get("type")) != CODE_SECTION_TYPE:
+        for key, value in list(section.items()):
+            if key not in _NON_TEXT_FIELDS:
+                section[key] = _unescape_text(value)
     for field in _IMAGE_SCALAR_FIELDS:
         if field in section:
             section[field] = _clean_image_url(section[field], known_text)
@@ -289,7 +311,10 @@ def dead_controls(html: Any, known_text: str = "") -> str | None:
             return "a link that goes nowhere or to a URL the user never gave"
     if is_interactive_html(re.sub(r"<\s*a\b", "<x", html)):
         scripts = " ".join(_SCRIPT_RE.findall(html))
-        if not (_HANDLER_RE.search(scripts) or re.search(r"\bon(?:click|mouseenter|mouseover)\s*=", html, re.IGNORECASE)):
+        # An inline onclick only works when the snippet has a script defining
+        # what it calls; onclick="go()" on its own does nothing.
+        inline = scripts.strip() and re.search(r"\bon(?:click|mouseenter|mouseover)\s*=", html, re.IGNORECASE)
+        if not (_HANDLER_RE.search(scripts) or inline):
             return "buttons, pills, tabs or other clickable-looking parts that no script makes work"
     return None
 
@@ -351,18 +376,82 @@ _TAG_TEXT_RE = re.compile(r"<style\b.*?</style>|<[^>]+>", re.IGNORECASE | re.DOT
 _AI_LABEL_RE = re.compile(r"\bAI\b|\bA\.I\.|artificial intelligence|\bai[- ](?:powered|generated|driven)\b")
 
 
-def build_code_section(section: dict[str, Any], known_text: str = "") -> dict[str, Any] | None:
+_ANCHOR_OPEN_RE = re.compile(r"<\s*a\b([^>]*)>", re.IGNORECASE)
+_ANCHOR_CLOSE_RE = re.compile(r"<\s*/\s*a\s*>", re.IGNORECASE)
+_HREF_ATTR_RE = re.compile(r"""\s+(?:href|target|rel)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+_BUTTON_OPEN_RE = re.compile(r"<\s*button\b([^>]*)>", re.IGNORECASE)
+_BUTTON_CLOSE_RE = re.compile(r"<\s*/\s*button\s*>", re.IGNORECASE)
+_FORM_TAG_RE = re.compile(r"<\s*/?\s*form\b[^>]*>", re.IGNORECASE)
+_FIELD_RE = re.compile(r"<\s*(?:input|select|textarea)\b[^>]*?(?:/>|>(?:.*?<\s*/\s*(?:select|textarea)\s*>)?)",
+                       re.IGNORECASE | re.DOTALL)
+_EXTERNAL_SCRIPT_TAG_RE = re.compile(r"<\s*script\b[^>]*\bsrc\s*=[^>]*>\s*<\s*/\s*script\s*>", re.IGNORECASE)
+_CLICK_ATTR_RE = re.compile(r"""\s+(?:onclick\s*=\s*(?:"[^"]*"|'[^']*')|role\s*=\s*["']?(?:button|tab|link|menuitem)["']?)""",
+                            re.IGNORECASE)
+_POINTER_RE = re.compile(r"cursor\s*:\s*pointer\s*;?", re.IGNORECASE)
+
+
+def neutralize_dead_controls(html: str, known_text: str = "") -> str:
+    """Turn controls that would lead nowhere into plain content, so the section
+    stays: forms and fields go, external scripts go, links to URLs the user
+    never gave become text, and without a script of its own, buttons become
+    text and nothing looks clickable. A snippet whose script makes its controls
+    work keeps them."""
+    html = _EXTERNAL_SCRIPT_TAG_RE.sub("", html)
+    html = _FIELD_RE.sub("", _FORM_TAG_RE.sub("", html))
+    hrefs = _LINK_HREF_RE.findall(html)
+    if any(not h.strip() or h.strip().startswith(("#", "javascript:")) or h.strip() not in (known_text or "")
+           for h in hrefs):
+        html = _ANCHOR_OPEN_RE.sub(lambda m: "<span" + _HREF_ATTR_RE.sub("", m.group(1)) + ">", html)
+        html = _ANCHOR_CLOSE_RE.sub("</span>", html)
+    if dead_controls(html, known_text):
+        html = _BUTTON_OPEN_RE.sub(lambda m: "<span" + m.group(1) + ">", html)
+        html = _BUTTON_CLOSE_RE.sub("</span>", html)
+        html = _CLICK_ATTR_RE.sub("", html)
+        html = _POINTER_RE.sub("", html)
+        # Control-like class names (btn, tag, pill, tab, ...): renamed in the
+        # markup and in its CSS alike, so the styling stays.
+        html = _CLASS_ATTR_RE.sub(lambda m: m.group(1) + _CONTROL_CLASS_RE.sub(r"ui\1", m.group(2)) + m.group(3), html)
+        html = _STYLE_BLOCK_RE.sub(lambda m: _CSS_CONTROL_CLASS_RE.sub(r".ui\1", m.group(0)), html)
+    return html
+
+
+_CONTROL_CLASS_WORDS = r"pill|pills|chip|chips|tag|tags|tab|tabs|filter|filters|category|categories|btn|button"
+_CONTROL_CLASS_RE = re.compile(rf"(?<![\w-])({_CONTROL_CLASS_WORDS})(?![\w-])", re.IGNORECASE)
+_CSS_CONTROL_CLASS_RE = re.compile(rf"\.({_CONTROL_CLASS_WORDS})(?![\w-])", re.IGNORECASE)
+_CLASS_ATTR_RE = re.compile(r"""(\bclass\s*=\s*["'])([^"']*)(["'])""", re.IGNORECASE)
+_STYLE_BLOCK_RE = re.compile(r"<\s*style\b[^>]*>.*?<\s*/\s*style\s*>", re.IGNORECASE | re.DOTALL)
+
+
+# Where the model puts a Code section's markup: "html", or a name of its own.
+_HTML_FIELD_NAMES = ("html", "code", "html_code", "custom_html", "content", "markup", "body_html", "snippet")
+
+
+def build_code_section(
+    section: dict[str, Any],
+    known_text: str = "",
+    allow_empty: bool = False,
+) -> dict[str, Any] | None:
     """A Custom Code section the AI wrote, reduced to the fields the section
-    has (html, bg colour, ...). None when it cannot stay: no HTML, or controls
-    that lead nowhere (dead_controls)."""
-    html = clean_code_html(section.get("html"))
+    has (html, bg colour, ...). Controls that lead nowhere are neutralised
+    (neutralize_dead_controls); None only when there is no HTML or a dead
+    control is left even after that."""
+    raw = next((section.get(k) for k in _HTML_FIELD_NAMES if isinstance(section.get(k), str) and section.get(k).strip()), "")
+    html = clean_code_html(raw)
     if not html:
-        logger.warning("Dropped Custom Code section without html")
-        return None
-    reason = dead_controls(html, known_text)
+        if allow_empty:
+            # An empty Code section shows its "Add your HTML & CSS" editor in the builder.
+            logger.info("Added an empty Custom Code section for the user to fill (fields sent: %s)", sorted(section))
+        else:
+            logger.warning("Dropped Custom Code section without html (fields sent: %s)", sorted(section))
+            return None
+    reason = dead_controls(html, known_text) if html else None
     if reason:
-        logger.warning("Dropped Custom Code section with %s", reason)
-        return None
+        html = neutralize_dead_controls(html, known_text)
+        still = dead_controls(html, known_text)
+        if still:
+            logger.warning("Dropped Custom Code section with %s", still)
+            return None
+        logger.warning("Neutralised %s in a Custom Code section", reason)
     colors = section.get("colors") if isinstance(section.get("colors"), dict) else {}
     bg = _parse_hex(colors.get("bg"))
     built: dict[str, Any] = {
@@ -678,7 +767,8 @@ def _sanitize_code_patch(
         return patch
     updates = patch.get("updates") if isinstance(patch.get("updates"), dict) else {}
     if action == "add_block":
-        built = build_code_section(updates, known_text)
+        # A user asking for "a code section" may want an empty one to write in.
+        built = build_code_section(updates, known_text, allow_empty=True)
         if built is None:
             return None
         built.pop("type")
@@ -689,6 +779,8 @@ def _sanitize_code_patch(
     kept: dict[str, Any] = {}
     if "html" in updates:
         html = clean_code_html(updates["html"])
+        if html and dead_controls(html, known_text):
+            html = neutralize_dead_controls(html, known_text)
         if not html or dead_controls(html, known_text):
             logger.warning("Dropped Custom Code html update (empty or with controls that lead nowhere)")
         else:

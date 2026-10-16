@@ -1192,17 +1192,16 @@ def _photo_gallery_format(urls: list[str]) -> str:
     )
 
 
-def _full_build_note(
+def _draw_code_format(
     session_id: str = "",
     kind: str = "any",
     has_photos: bool = False,
     photo_urls: list[str] | None = None,
 ) -> str:
-    """The full-build service note with one Code section format: a photo
-    gallery when the user has enough photos, else one for this kind of page
-    drawn from that kind's shuffle bag."""
+    """One Code section format: a photo gallery when the user has enough
+    photos, else one for this kind of page from that kind's shuffle bag."""
     if photo_urls and len(photo_urls) >= _PHOTO_GALLERY_MIN:
-        return _FULL_BUILD_CODE_BLOCKS_NOTE.replace("{format}", _photo_gallery_format(photo_urls))
+        return _photo_gallery_format(photo_urls)
     last = _last_code_block_format.get(session_id, (0.0, ""))[1]
     texts = dict(_formats_for(kind, has_photos))
     interactive = {key for key, is_interactive, *_rest in _CODE_FORMATS if is_interactive}
@@ -1216,7 +1215,45 @@ def _full_build_note(
         choice = bag.pop(pick)
     if session_id:
         _remember_session_value(_last_code_block_format, session_id, choice)
-    return _FULL_BUILD_CODE_BLOCKS_NOTE.replace("{format}", texts[choice])
+    return texts[choice]
+
+
+def _full_build_note(
+    session_id: str = "",
+    kind: str = "any",
+    has_photos: bool = False,
+    photo_urls: list[str] | None = None,
+) -> str:
+    """The full-build service note with one Code section format."""
+    return _FULL_BUILD_CODE_BLOCKS_NOTE.replace(
+        "{format}", _draw_code_format(session_id, kind, has_photos, photo_urls)
+    )
+
+
+# An edit that asks for a code / HTML / custom section: without the full-build
+# note the model added an empty Code section (title and colours, no html).
+_CODE_SECTION_ASK_RE = re.compile(
+    r"\b(?:code|html|custom|interactive|widget)\b[^.?!\n]{0,30}\b(?:section|block|part)\b"
+    r"|\b(?:section|block)\b[^.?!\n]{0,20}\b(?:with|of|in)\s+(?:code|html)\b",
+    re.IGNORECASE,
+)
+_CODE_SECTION_EDIT_NOTE = (
+    "\n\n(Service note — the user asked for a Custom Code section. Send an add_block patch with \"type\": 11 "
+    "and updates {\"html\": \"<the complete snippet>\", \"colors\": {\"bg\": \"<a background this page already "
+    "uses>\"}} and write the html yourself — never an empty section, unless the user says they will write "
+    "the code. Its content is about THIS page: the brand, offer and copy in the page state. For this section "
+    "use this format: {format}. Open it with a short uppercase eyebrow, a heading and one line of intro; colour "
+    "it only with var(--page-text), var(--page-muted), var(--page-accent), var(--page-card) and "
+    "var(--page-line); every clickable part must work through the inline <script>; no emoji, no gradients, no "
+    "vh heights.)"
+)
+
+
+def _code_section_edit_note(message: str, session_id: str, kind: str, has_photos: bool) -> str:
+    """The note for an edit turn that asks for a Code section, else ""."""
+    if not _CODE_SECTION_ASK_RE.search(message or ""):
+        return ""
+    return _CODE_SECTION_EDIT_NOTE.replace("{format}", _draw_code_format(session_id, kind, has_photos))
 def _code_block_problem(html: Any, known_text: str = "") -> str | None:
     """Why HTML Bob wrote cannot stay, or None. Interactive parts are welcome
     when its own script makes them work; controls that do nothing are not."""
@@ -1956,6 +1993,12 @@ async def builder_chat(request: BuilderChatRequest):
     if full_build:
         logger.info("Full build: page kind %s, %d user photo(s)%s", page_kind, len(photo_urls),
                     " — photo gallery" if len(photo_urls) >= _PHOTO_GALLERY_MIN else "")
+    else:
+        # The page state tells what kind of page this is better than a short edit request.
+        edit_kind = _page_kind(f"{request.page_context or ''}\n{request.message or ''}", community_facts)
+        full_build_note = _code_section_edit_note(request.message, request.session_id, edit_kind, has_photos)
+        if full_build_note:
+            logger.info("Edit asks for a Code section: page kind %s", edit_kind)
     build_theme = _pick_build_theme(request.session_id) if full_build and _ai_picks_colours(request.message) else None
     if build_theme:
         full_build_note += _ai_palette_note(build_theme)
