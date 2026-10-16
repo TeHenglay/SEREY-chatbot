@@ -122,6 +122,10 @@ class BuilderUsage(BaseModel):
     prompt_tokens: int = Field(default=0)
     cached_tokens: int = Field(default=0)
     completion_tokens: int = Field(default=0)
+    reasoning_tokens: int = Field(
+        default=0,
+        description="Thinking tokens (grok-4.x). Reported apart from completion_tokens but billed by xAI as output.",
+    )
     model: Optional[str] = Field(default=None)
     images_generated: int = Field(
         default=0,
@@ -166,9 +170,16 @@ class BuilderChatResponse(BaseModel):
         default=None,
         description="Upload prompts the frontend should render when sections need images",
     )
-    styles_selected: Optional[list[StyleSelection]] = Field(
+    styles_selected: list[StyleSelection] = Field(
+        default_factory=list,
+        description="Layout-only changes the model sent ({section, instance_key, style}), each style validated "
+                    "against the catalog. Always a list, never null.",
+    )
+    code_blocks: Optional[list[dict[str, Any]]] = Field(
         default=None,
-        description="Final resolved style per section after backend validation",
+        description="Custom HTML blocks to add / update / delete, passed through from the model unchanged: "
+                    "{action: 'add', html, section?, instance_key?, height?, width?} | {action: 'update', id, html?, "
+                    "height?, width?} | {action: 'delete', id}. May come with a blueprint or patches.",
     )
     blueprint: Optional[PageBlueprint] = Field(
         default=None,

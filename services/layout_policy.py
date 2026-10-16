@@ -6,6 +6,7 @@ from typing import Any
 # the fe-serey-web frontend). This module only holds the derivation logic.
 from services.section_catalog import (
     ARRAY_UPLOAD_LABELS as _ARRAY_UPLOAD_LABELS,
+    PRODUCT_SUBTYPE_STYLES,
     SCALAR_UPLOAD_LABELS as _SCALAR_UPLOAD_LABELS,
     SECTION_STYLE_MAP,
     SECTION_TYPE_ID_MAP,
@@ -35,19 +36,34 @@ def get_default_style(section_type: str) -> int:
     return int(styles[0])
 
 
-def normalize_style(section_type: str, style: Any) -> tuple[int, bool]:
+def _allowed_styles_for(section_type: str, section_subtype: Any) -> tuple[int, ...]:
+    allowed = tuple(SECTION_STYLE_MAP[section_type]["allowed_styles"])
+    if section_type != "GALLERY":
+        return allowed
+    if section_subtype == "product":
+        return PRODUCT_SUBTYPE_STYLES
+    if section_subtype is None:
+        # Subtype unknown (a patch or styles_selected entry that does not
+        # repeat it): accept a style that is valid for either list.
+        return allowed + tuple(v for v in PRODUCT_SUBTYPE_STYLES if v not in allowed)
+    return allowed
+
+
+def normalize_style(section_type: str, style: Any, section_subtype: Any = None) -> tuple[int, bool]:
+    """Returns (style, changed). An invalid style becomes the first style of the
+    section's catalog list (the product list for a product GALLERY)."""
     if section_type not in SECTION_STYLE_MAP:
         try:
             return int(style), False
         except (TypeError, ValueError):
             return 1, True
-    allowed = SECTION_STYLE_MAP[section_type]["allowed_styles"]
+    allowed = _allowed_styles_for(section_type, section_subtype)
     try:
         parsed = int(style)
     except (TypeError, ValueError):
-        return get_default_style(section_type), True
+        return int(allowed[0]), True
     if parsed not in allowed:
-        return get_default_style(section_type), True
+        return int(allowed[0]), True
     return parsed, False
 
 
