@@ -1,17 +1,51 @@
 # Single source of truth for everything the AI builder must know about the
-# Serey V2 landing-page frontend. Every constant here mirrors a constant in
-# fe-serey-web — the frontend file/name is noted next to each block.
-# When the frontend gains a section, style, font, or field, update it HERE
-# and the system prompt / validators pick it up automatically.
+# Serey V2 landing-page frontend.
+#
+# Section styles, colour keys and animation styles are LOADED from
+# services/builder_ai/builder-section-catalog.json — an exact copy of
+# fe-serey-web docs/ai/builder-section-catalog.json, which the frontend
+# generates from LandingBuilderV2.js (scripts/export-ai-builder-prompt.js).
+# Never edit that copy by hand: regenerate it in the frontend and copy it over;
+# eval/catalog_check.py fails while the copy differs from the frontend file.
+# The rest of this module mirrors frontend constants by hand (noted per block).
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Any
+
+BUILDER_AI_DIR = os.path.join(os.path.dirname(__file__), "builder_ai")
+CATALOG_JSON_PATH = os.path.join(BUILDER_AI_DIR, "builder-section-catalog.json")
+PROMPT_MD_PATH = os.path.join(BUILDER_AI_DIR, "builder-ai-prompt.md")
+
+with open(CATALOG_JSON_PATH, encoding="utf8") as _f:
+    FE_CATALOG: dict[str, Any] = json.load(_f)
+
+# Section name ("HERO") -> its catalog entry
+FE_SECTIONS: dict[str, dict[str, Any]] = {s["name"]: s for s in FE_CATALOG["sections"]}
+
+# Custom HTML blocks (top-level `code_blocks` response key): actions with their
+# required/optional fields, html length cap, height/width ranges.
+CODE_BLOCKS_SPEC: dict[str, Any] = FE_CATALOG.get("code_blocks") or {}
+
+_SYSTEM_PROMPT_HEADING = "## SYSTEM PROMPT"
+
+
+def builder_prompt_from_doc() -> str:
+    """The builder system prompt from builder-ai-prompt.md: everything from the
+    "## SYSTEM PROMPT" heading to the end. The header above it is notes for humans."""
+    with open(PROMPT_MD_PATH, encoding="utf8") as f:
+        text = f.read().replace("\r\n", "\n")
+    lines = text.split("\n")
+    start = next(i for i, line in enumerate(lines) if line.strip() == _SYSTEM_PROMPT_HEADING)
+    return "\n".join(lines[start:]).strip()
 
 # ---------------------------------------------------------------------------
 # Section types
 # Mirrors: fe-serey-web src/config/constants.js LANDING_PAGE_TEMPLATE_TYPE_V2
-# and LandingBuilderV2.js resolveTypeKey().
+# and LandingBuilderV2.js resolveTypeKey(); _validate() checks it against the
+# catalog JSON.
 # NOTE: NEWSLETTER (14) exists in the frontend enum but resolveTypeKey has no
 # numeric mapping for it — the AI must use SUBSCRIPTION (13) instead.
 # TEXTBLOCK is string-only: it has no numeric ID and must be emitted as the
@@ -34,6 +68,7 @@ SECTION_TYPE_ID_MAP: dict[int, str] = {
     13: "SUBSCRIPTION",
     14: "NEWSLETTER",
     15: "NOTES",
+    16: "PODCAST",
 }
 
 SECTION_TYPE_NAME_TO_ID: dict[str, int] = {v: k for k, v in SECTION_TYPE_ID_MAP.items()}
@@ -44,135 +79,31 @@ STRING_ONLY_SECTION_TYPES: tuple[str, ...] = ("TEXTBLOCK",)
 ALL_SECTION_TYPES: tuple[str, ...] = tuple(SECTION_TYPE_ID_MAP.values()) + STRING_ONLY_SECTION_TYPES
 
 # ---------------------------------------------------------------------------
-# Layout styles per section — value, label, description.
-# Mirrors: LandingBuilderV2.js SectionLayoutStylePicker (the visual style strip
-# the user actually sees) — that picker, not the legacy SECTION_STYLE_OPTIONS
-# dropdown, is the source of truth for which style numbers exist.
-# Order matches the frontend picker; the FIRST value is the default style.
-# NOTE: the picker labels its chips by POSITION for ABOUT and TESTIMONIALS
-# (chip "1." is not style 1) — always use the `value` here, never the chip number.
-# The old full-bleed "style 99" variant no longer exists: any section can carry
-# a background image via bg_image_url on any style.
+# Layout styles per section — value, label, description — from the catalog
+# JSON. Every listed style is valid for the AI, whatever its `status`:
+# "picker" (has a chip), "variant" (e.g. ABOUT 10/11/12) or "hidden" (HERO 2).
+# Order matches the catalog; the FIRST value is the fallback for an invalid style.
+# GALLERY with section_subtype "product" has its own list (PRODUCT_STYLES).
 # ---------------------------------------------------------------------------
 
+
+def _style_rows(styles: list[dict[str, Any]]) -> tuple[tuple[int, str, str], ...]:
+    return tuple((int(s["value"]), s["label"], s.get("description", "")) for s in styles)
+
+
 SECTION_STYLES: dict[str, tuple[tuple[int, str, str], ...]] = {
-    "HERO": (
-        (1, "Backdrop", "Text on the left over a full-bleed background image, no overlay"),
-        (3, "Centered", "Title and description centered on a solid background color, no image"),
-        (4, "Magazine", "Editorial-style layout with bold typography and image panel"),
-        (5, "Mag Cover", "Magazine cover style with horizontal rules and editorial typography"),
-        (6, "Card Overlay", "Padded dark card with image background, overlay gradient, and centered bold text"),
-    ),
-    "ABOUT": (
-        (8, "Social", "Image on left, title and description on right with a row of social links below"),
-        (1, "Panel", "Colored accent panel on the left with the text beside it, no image"),
-        (4, "Text Only", "Centered title and description, no image"),
-        (9, "Split Panel", "Two columns: description on a light panel, title on a slightly darker panel"),
-        (13, "Spotlight", "Portrait image with a star-rating badge, title/description with a Learn More button and a small accent photo — fixed layout"),
-    ),
-    "GALLERY": (
-        (1, "Classic", "Uniform 3-column image grid"),
-        (2, "Feature R", "2x2 grid left with a large featured image on the right"),
-        (3, "Bento", "Two rows of uneven-width mosaic tiles with name captions — auto-slides in groups of 6 when there are more"),
-        (4, "Polaroid", "Polaroid-style photo cards with slight tilt and shadow"),
-        (5, "Coverflow", "Center image large and centered, fading/shrinking out on each side — slides one at a time"),
-        (6, "Slideshow", "Full-width slideshow with arrows, dots, and autoplay"),
-        (7, "Wall", "Tight no-gap grid with many small cells"),
-        (8, "Feature Strip", "Large featured image on the left with a narrow vertical stack of 4 thumbnails on the right"),
-        (9, "Mosaic Grid", "Top row of 4 equal photos; bottom row has the 5th photo large with the 6th/7th stacked beside it"),
-    ),
-    "VIDEO": (
-        (1, "Classic", "Title and description above a single centered video player"),
-        (2, "Split", "Text column on one side, video player on the other"),
-        (3, "Showcase", "One large featured video with a sidebar list of the others"),
-        (4, "Film Review", "Editorial film-review layout: rules, eyebrow label, big title, then a row of players"),
-        (5, "Feature", "Click-to-play video thumbnail on one side, title and description on the other"),
-        (6, "Grid", "Up to 4 click-to-play video thumbnails in a 2x2 card grid, each with its own title"),
-    ),
-    "VISION": (
-        (1, "Cards", "Goal, Vision, Mission each in a separate colored card"),
-        (2, "3 Columns", "Three equal columns side by side"),
-        (3, "Icon Rows", "Rows with icons, titles, and descriptions"),
-        (4, "Steps Dark", "Dark background with numbered step-style layout"),
-        (5, "Feature Grid", "Feature-grid with icon tiles and short descriptions"),
-        (6, "Split Panel", "Large panel split between goal/vision/mission vertically"),
-        (7, "Text Only", "Plain stacked title and description text, no cards or icons"),
-    ),
-    "BLOG": (
-        (1, "Grid", "3-column card grid of blog post previews"),
-        (2, "List", "Vertical list of posts with thumbnail on the left"),
-        (3, "Magazine", "Featured large post on top, smaller posts below"),
-        (4, "Minimal", "Text-only list, no thumbnails — clean and fast"),
-        (5, "Overlay", "Image cards with text overlaid on a dark gradient"),
-        (6, "Editorial", "Newspaper editorial-style with mixed large/small blocks"),
-        (7, "Mag Front Page", "Front-page layout: one large featured post beside a numbered sidebar list"),
-        (8, "Editorial Strip", "Title and subtitle above a rule, three square images with captions below"),
-        (9, "News Row", 'Title with a "View all news" link, three dated cards with excerpts below'),
-    ),
-    "TEAM": (
-        (1, "Grid", "Uniform grid of member photos with name and role"),
-        (2, "Cards", "Cards with photo, name, role, and short bio"),
-        (3, "Banner", "Wide banner-style strips for each member"),
-        (5, "Color Card", "Colored card with the photo bleeding to the edges and a name/role tag overlapping the bottom"),
-        (6, "Circle Bio", "Circular photo with name, a colored role badge, and a short bio underneath"),
-    ),
-    "FAQ": (
-        (1, "Accordion", "Classic expand/collapse accordion for each question"),
-        (2, "Two Col", "Questions and answers in two side-by-side columns"),
-        (3, "Split", "Questions on the left panel, answers on the right"),
-        (4, "Left Border", "Each item has a colored left border accent"),
-        (5, "Cards", "Each Q&A pair in its own card"),
-        (6, "Numbered", "Numbered Q&A list with large question numbers"),
-        (7, "Q&A Interview", "Interview-style layout: eyebrow label and title above rule-separated question/answer pairs"),
-    ),
-    "TESTIMONIALS": (
-        (1, "Cards", "Quote cards with avatar, name, and star rating"),
-        (7, "Cards (No Image)", "Card-style quotes with name/role and no avatar image"),
-        (9, "Large Quote", "One large centered quote with the author photo below"),
-        (10, "Pull Quote", "Large italic editorial pull-quote with prev/next navigation and accent-colored dots"),
-        (6, "Bubble", "Speech-bubble quote cards with a tail, avatar and name underneath"),
-        (11, "Star Cards", "Staggered 3-card grid with a star rating, eyebrow label, and bold heading above"),
-        (12, "Split Dark", "Full-width photo on one side, dark panel on the other with stars, quote and name"),
-    ),
-    "CUSTOM": (
-        (1, "Split Right", "Text on left, image on right"),
-        (2, "Split Left", "Image on left, text on right"),
-        (3, "Centered", "Centered text and image, stacked vertically"),
-        (4, "Banner", "Full-width banner with overlaid text and optional button"),
-        (5, "Card", "Content inside a centered card with shadow"),
-        (6, "Highlight", "Highlighted accent block with two images and text"),
-    ),
-    "RANKING": (
-        (1, "List", "Ranked vertical list with position numbers"),
-        (2, "Podium", "Top 3 on a podium, rest in a list below"),
-        (3, "Cards", "Author cards in a grid with avatar and stats"),
-        (4, "Circles", "Circular avatar bubbles arranged in a row"),
-        (5, "Leaderboard", "Editorial leaderboard: eyebrow label and title above numbered rows with avatar, name and post count"),
-    ),
-    "SUBSCRIPTION": (
-        (1, "Centered Card", "Centered bordered card with title, description and form"),
-        (2, "Cinematic", "Full-width section with large background, gradient overlay and eyebrow label"),
-        (3, "Split Panel", "Accent-colored left panel with text, white right panel with form"),
-        (4, "Benefits + Form", "Bullet benefit list on the left, subscription form card on the right"),
-        (5, "Checklist + Card", "Equal two-column split: title and a checklist of benefits on the left, a bordered form card on the right"),
-        (6, "Split Image", "Equal two-column split: title, description and form on the left, a full-height photo on the right"),
-    ),
-    "FOOTER": (
-        (1, "Dark Navy", "Dark navy/black background with white text and social icons"),
-        (2, "Minimal", "Light minimal footer with just contact info and links"),
-        (3, "Columns", "Multi-column footer with contact, socials, and logo"),
-        (4, "Gradient Split", "Dark gradient background with logo and socials on left, contact on right, social icons as glowing circles"),
-        (5, "Editorial", "Bold top border, brand and socials in a top row, contact chips and copyright in bottom row — clean magazine style"),
-    ),
-    "NOTES": (
-        (1, "Slider", "Dark band with a 3-up slider of trending note cards (author, text, image)"),
-        (2, "Masonry", "Pinterest-style wall of all notes in staggered columns"),
-        (3, "Spotlight", "One large featured note on the left with a compact list of the next notes on the right"),
-    ),
-    # Not in the frontend style picker — single-layout sections.
+    name: _style_rows(section["styles"]) for name, section in FE_SECTIONS.items()
+}
+# Not in the catalog: sections the AI may not send (CUSTOM, NEWSLETTER) or
+# that have a single layout (TEXTBLOCK). Kept so existing pages still resolve.
+SECTION_STYLES.update({
+    "CUSTOM": ((1, "Code", "The user's own HTML & CSS in a sandboxed iframe"),),
     "NEWSLETTER": ((1, "Default", "Simple newsletter signup block"),),
     "TEXTBLOCK": ((1, "Default", "Free-form rich text block"),),
-}
+})
+
+PRODUCT_STYLES: tuple[tuple[int, str, str], ...] = _style_rows(FE_SECTIONS["GALLERY"]["product_styles"])
+PRODUCT_SUBTYPE_STYLES: tuple[int, ...] = tuple(v for v, _label, _desc in PRODUCT_STYLES)
 
 
 def allowed_styles(section_type: str) -> tuple[int, ...]:
@@ -184,42 +115,6 @@ def style_label(section_type: str, style: int) -> str:
         if value == style:
             return label
     return f"Style {style}"
-
-
-# ---------------------------------------------------------------------------
-# Layout style preference weights — which styles the AI should reach for when
-# it picks or randomizes a section's layout. Unlike SECTION_STYLES (a mirror of
-# the frontend) this is a product preference: some layouts simply photograph
-# better on a generated page than others.
-#   high   — default/first choice, use most often
-#   low    — only when the user explicitly asks for it, or as a last resort
-#   medium — everything else, including sections absent from this table
-# ---------------------------------------------------------------------------
-
-STYLE_WEIGHTS: dict[str, dict[str, tuple[int, ...]]] = {
-    "ABOUT":        {"high": (8, 9), "low": (1,)},
-    "TESTIMONIALS": {"high": (1, 9, 10, 6, 11, 12), "low": ()},
-    "FOOTER":       {"high": (2, 5), "low": ()},
-    "GALLERY":      {"high": (1, 2, 3, 4), "low": ()},
-    "VIDEO":        {"high": (1, 2, 3, 4), "low": ()},
-    "VISION":       {"high": (2, 5, 7), "low": ()},
-    "BLOG":         {"high": (1, 2, 3, 4, 5, 6, 7, 8, 9), "low": ()},
-    "TEAM":         {"high": (1, 6), "low": (2, 3)},
-    "FAQ":          {"high": (1, 2, 3, 4, 5, 6, 7), "low": ()},
-    "SUBSCRIPTION": {"high": (2, 4), "low": ()},
-    "NOTES":        {"high": (1, 2, 3), "low": ()},
-}
-
-
-def style_weight(section_type: str, style: int) -> str:
-    weights = STYLE_WEIGHTS.get(section_type)
-    if not weights:
-        return "medium"
-    if style in weights.get("high", ()):
-        return "high"
-    if style in weights.get("low", ()):
-        return "low"
-    return "medium"
 
 
 # ---------------------------------------------------------------------------
@@ -237,9 +132,11 @@ def _build_rendered_fields() -> dict[str, dict[int, tuple[str, ...]]]:
         # AboutSection.js): hero style 3 (Centered) and about styles 1 (Panel),
         # 4 (Text Only) and 9 (Split Panel) render no image; about 13
         # (Spotlight) renders a main photo plus a small accent photo.
-        "HERO": {"image_url": (1, 4, 5, 6)},
-        "ABOUT": {"image_url": (8, 13), "image_url_2": (13,)},
-        "CUSTOM": {"image_url": (1, 2, 3, 4, 5, 6), "image_url_2": (6,)},
+        # Hero 2 (Cinematic) and the about variants 10/11/12 come from the
+        # catalog JSON: 10 (Social: Multi Image) shows image_url + image_url_2,
+        # 11/12 (Split Panel + image) show image_url.
+        "HERO": {"image_url": (1, 2, 4, 5, 6)},
+        "ABOUT": {"image_url": (8, 10, 11, 12, 13), "image_url_2": (10, 13)},
     }
     array_fields: dict[str, str] = {
         "GALLERY": "images",
@@ -280,8 +177,6 @@ SCALAR_UPLOAD_LABELS: dict[tuple[str, str], str] = {
     ("hero", "image_url"): "Hero Background",
     ("about", "image_url"): "About Section Image",
     ("about", "image_url_2"): "About Accent Photo",
-    ("custom", "image_url"): "Custom Section Image",
-    ("custom", "image_url_2"): "Custom Section Image 2",
     ("footer", "logo_url"): "Footer Logo",
 }
 
@@ -334,8 +229,8 @@ CURATED_PALETTES: dict[str, dict[str, str]] = {
 # Animations, image shapes, section themes
 # ---------------------------------------------------------------------------
 
-# Mirrors LandingBuilderV2.js ANIM_OPTIONS (top-level animation_style).
-ANIMATION_STYLES: tuple[str, ...] = ("none", "fade", "slide-up", "slide-left", "blur")
+# Top-level animation_style values, from the catalog JSON (ANIM_OPTIONS).
+ANIMATION_STYLES: tuple[str, ...] = tuple(FE_CATALOG["animation_styles"])
 
 # Mirrors Shared/LandingPageV2/imageShapes.js IMAGE_SHAPE_OPTIONS
 # (per-section image_shape field; "" = default/square).
@@ -347,28 +242,19 @@ IMAGE_SHAPES: tuple[str, ...] = (
 SECTION_THEMES: tuple[str, ...] = ("", "editorial")
 
 # ---------------------------------------------------------------------------
-# Colors — per-section color keys. Mirrors LandingBuilderV2.js SECTION_COLOR_CONFIG.
+# Colors — per-section color keys, from the catalog JSON (SECTION_COLOR_CONFIG).
 # All keys are hex strings inside the section "colors" object.
 # ---------------------------------------------------------------------------
 
 SECTION_COLOR_KEYS: dict[str, tuple[str, ...]] = {
-    "HERO": ("title", "accent", "subtitle", "body", "bg"),
-    "ABOUT": ("title", "accent", "body", "bg"),
-    "GALLERY": ("title", "accent", "body", "bg"),
-    "VIDEO": ("title", "accent", "body", "bg"),
-    "VISION": ("title", "accent", "body", "bg", "goal_color", "vision_color", "mission_color"),
-    "BLOG": ("title", "accent", "body", "bg"),
-    "TEAM": ("title", "accent", "bg"),
-    "FAQ": ("title", "accent", "bg"),
-    "TESTIMONIALS": ("title", "body", "accent", "bg"),
-    "CUSTOM": ("title", "body", "accent", "bg"),
-    "RANKING": ("title", "bg"),
-    "NOTES": ("title", "body", "bg"),
-    "SUBSCRIPTION": ("bg", "card_bg", "accent"),
-    "FOOTER": ("title", "bg", "accent"),
+    name: tuple(section["colors"]) for name, section in FE_SECTIONS.items()
+}
+# Not in the catalog (sections the AI may not send / single-layout).
+SECTION_COLOR_KEYS.update({
+    "CUSTOM": ("bg",),
     "NEWSLETTER": ("title", "bg", "accent"),
     "TEXTBLOCK": ("title", "body", "bg"),
-}
+})
 
 # ---------------------------------------------------------------------------
 # text_styles — per-section typography overrides.
@@ -401,21 +287,16 @@ SECTION_FIELD_DOCS: dict[str, str] = {
     "TEAM": "title, description, members[{name, role, image_url}]",
     "FAQ": "title, faq_items[{question, answer}]",
     "TESTIMONIALS": "title, testimonial_items[{name, role, content, image_url}] (generate at most 4)",
-    "CUSTOM": "title, description, button_label, button_url, image_url, image_url_2, image_url_3, image_shape",
+    "CUSTOM": "html (the user's own HTML & CSS, max 50,000 chars), title (internal label, not shown) — written by the user in the code editor, never by the AI",
     "RANKING": "title, description, authors (always leave as []) — top authors are auto-fetched",
     "NOTES": 'title, description, feed_type ("trending" | "latest") — community notes are auto-fetched, never invent them',
+    "PODCAST": 'title, description, feed_type ("latest" | "oldest") — episodes are auto-fetched, never invent them',
     "SUBSCRIPTION": 'title, description, button_label ("Subscribe"), placeholder_text, newsletter_provider ("" | "kit" | "email_octopus"), kit_embed_script, email_octopus_embed_script — leave provider/embed fields "" unless the user provides them',
     "TEXTBLOCK": "title, description, content (free-form rich text) — emit type as the string \"TEXTBLOCK\" (it has no numeric ID)",
 }
 
 # Gallery subtypes the frontend renders (GALLERY_SUBTYPE_LABELS / ProductSection).
 GALLERY_SUBTYPES: tuple[str, ...] = ("gallery", "product", "project")
-
-# GALLERY subtype 'product' renders via ProductSection and has its OWN style
-# picker: 1 Duo, 2 List, 4 Editorial, 5 Shop, 6 Duo (Text Outside). Any other
-# number falls back to style 1. The photo subtypes ('gallery'/'project') use
-# the full GALLERY style list above.
-PRODUCT_SUBTYPE_STYLES: tuple[int, ...] = (1, 2, 4, 5, 6)
 
 # ---------------------------------------------------------------------------
 # Frontend starter templates — mirrors LandingBuilderV2/landingTemplates.js
@@ -463,52 +344,22 @@ FRONTEND_TEMPLATES: dict[str, dict[str, Any]] = {
 }
 
 
-def build_templates_block() -> str:
-    lines: list[str] = []
-    for name, t in FRONTEND_TEMPLATES.items():
-        parts = ", ".join(
-            f"{sec} s{style}" + (f" ({subtype})" if subtype else "") + (" [hidden]" if hidden else "")
-            for sec, style, subtype, hidden in t["sections"]
-        )
-        lines.append(f"  {name} ({t['label']}): font \"{t['font']}\", animation {t['animation']} — {parts}")
-    return "\n".join(lines)
-
-
-# Style guidance for sections the onboarding flow appends BEYOND a template's
-# base structure (the "Add more sections?" picker splices them before FOOTER).
-# Keyed by template id; each value: (styles that fit the template's vibe,
-# styles to avoid). Mirrors the cheat sheet in BUILDER_V2_AI_BACKEND.md.
-TEMPLATE_EXTRA_STYLE_GUIDE: dict[str, dict[str, str]] = {
-    "ecommerce": {
-        "use": "bold high-contrast layouts — VISION s2, TEAM s5, FAQ s1, SUBSCRIPTION s4 (product galleries stay s1)",
-        "avoid": "soft serif/editorial styles (magazine and pull-quote layouts)",
-    },
-    "creator": {
-        "use": "dark modern visual layouts — GALLERY s5/s6, VIDEO s3, VISION s4, SUBSCRIPTION s2",
-        "avoid": "light pastel or plain 3-column text styles",
-    },
-    "portfolio": {
-        "use": "clean white minimal text-led layouts — ABOUT s9, FAQ s3, VISION s5, TESTIMONIALS s9",
-        "avoid": "cinematic dark styles and product-card shelves",
-    },
-}
-
-
-def build_template_extras_block() -> str:
-    lines: list[str] = []
-    for name, g in TEMPLATE_EXTRA_STYLE_GUIDE.items():
-        lines.append(f"  {name}: use {g['use']}; avoid {g['avoid']}")
-    return "\n".join(lines)
-
-
 # Sections the AI may generate = sections the frontend can map AND render
 # (LandingBuilderV2.js resolveTypeKey). Excluded although they exist in the
 # frontend enum: NEWSLETTER (14) — use SUBSCRIPTION (13) for email signup — and
-# CUSTOM (11), which has no mapping or renderer, so the frontend silently drops it.
+# CUSTOM (11), the Custom Code section (builder key "code"): the user writes its
+# HTML & CSS in the code editor. The AI never creates, edits or deletes one;
+# sanitize_content() puts the page's own type 11 sections back unchanged.
+# (Type 11 was an older "Custom Section" with title/description/images until
+# 2026-07-31; a type 11 section without `html` is legacy data from it.)
 GENERATABLE_SECTIONS: tuple[str, ...] = (
     "HERO", "ABOUT", "GALLERY", "FOOTER", "VIDEO", "VISION", "BLOG", "TEAM",
-    "FAQ", "TESTIMONIALS", "RANKING", "SUBSCRIPTION", "NOTES", "TEXTBLOCK",
+    "FAQ", "TESTIMONIALS", "RANKING", "SUBSCRIPTION", "NOTES", "PODCAST", "TEXTBLOCK",
 )
+
+# The Custom Code section: type 11, builder key "code" (extra copies "code__2", …).
+CODE_SECTION_TYPE = "CUSTOM"
+CODE_SECTION_KEY = "code"
 
 
 # ---------------------------------------------------------------------------
@@ -539,40 +390,6 @@ def build_section_registry_block() -> str:
     return "\n".join(lines)
 
 
-def build_style_descriptions_block() -> str:
-    blocks: list[str] = []
-    for name in GENERATABLE_SECTIONS:
-        styles = SECTION_STYLES.get(name)
-        if not styles or name == "TEXTBLOCK":
-            continue
-        rows = "\n".join(f"  {value} = {label} — {desc}" for value, label, desc in styles)
-        blocks.append(f"{name} styles:\n{rows}")
-    return "\n\n".join(blocks)
-
-
-def build_style_weights_block() -> str:
-    """Renders STYLE_WEIGHTS as a High/Medium/Low table for the system prompt."""
-    blocks: list[str] = []
-    for name in GENERATABLE_SECTIONS:
-        styles = SECTION_STYLES.get(name)
-        if not styles or name == "TEXTBLOCK":
-            continue
-        buckets: dict[str, list[str]] = {"High": [], "Medium": [], "Low": []}
-        for value, label, _desc in styles:
-            buckets[style_weight(name, value).capitalize()].append(f"{label} ({value})")
-        if not STYLE_WEIGHTS.get(name):
-            blocks.append(f"  {name}: no preference — treat every style as Medium")
-            continue
-        if not buckets["Medium"] and not buckets["Low"]:
-            blocks.append(f"  {name}: High — all styles equally")
-            continue
-        rows = "\n".join(
-            f"      {tier:<7}{', '.join(items)}" for tier, items in buckets.items() if items
-        )
-        blocks.append(f"  {name}:\n{rows}")
-    return "\n".join(blocks)
-
-
 def build_palettes_block() -> str:
     rows = "\n".join(
         f"  {name:<18}: hero_bg={p['hero_bg']}  title={p['title']}  accent={p['accent']}  "
@@ -595,12 +412,13 @@ def build_color_keys_block() -> str:
 
 
 def _validate() -> None:
-    """Catch drift between SECTION_STYLES and everything keyed off it."""
-    for section, weights in STYLE_WEIGHTS.items():
-        allowed = set(allowed_styles(section))
-        for tier in ("high", "low"):
-            unknown = set(weights.get(tier, ())) - allowed
-            assert not unknown, f"STYLE_WEIGHTS[{section}].{tier}: unknown styles {sorted(unknown)}"
+    """Catch drift between the catalog JSON and everything keyed off it."""
+    for name, section in FE_SECTIONS.items():
+        assert SECTION_TYPE_ID_MAP.get(section["type"]) == name, (
+            f"catalog JSON: {name} is type {section['type']}, SECTION_TYPE_ID_MAP has "
+            f"{SECTION_TYPE_ID_MAP.get(section['type'])!r}"
+        )
+        assert name in GENERATABLE_SECTIONS, f"catalog JSON section {name} is missing from GENERATABLE_SECTIONS"
     for name, template in FRONTEND_TEMPLATES.items():
         for section, style, subtype, _hidden in template["sections"]:
             valid = PRODUCT_SUBTYPE_STYLES if subtype == "product" else allowed_styles(section)

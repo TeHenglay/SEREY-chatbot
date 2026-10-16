@@ -1,10 +1,12 @@
 # Pydantic v2 schemas for the Serey V2 landing page builder.
-# Section types use numeric IDs (1-14) in API responses; strings are used internally.
+# Section types use numeric IDs (1-16) in API responses; strings are used internally.
+# Section and item models keep fields they do not declare (extra="allow"): the
+# frontend registry grows faster than this file, and a dropped field is lost content.
 # TEXTBLOCK is string-only (no numeric ID) and serializes as "TEXTBLOCK".
 # API contract: POST /api/v2/landing-pages body = { template, font, animation_style, community_id, content: [...sections] }
 
 from typing import Any, Literal
-from pydantic import BaseModel, Field, field_validator, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer, model_validator
 
 from services.section_catalog import SECTION_TYPE_ID_MAP, SECTION_TYPE_NAME_TO_ID
 
@@ -16,12 +18,16 @@ _SECTION_TYPE_NAME_TO_ID: dict[str, int] = SECTION_TYPE_NAME_TO_ID
 # ---------------------------------------------------------------------------
 
 class GalleryImage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     image_url: str = ""
     name: str = ""
     description: str = ""
 
 
 class SocialLink(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     type: str = Field(..., description="facebook | instagram | telegram | twitter")
     handle: str = ""
     url: str | None = None
@@ -45,18 +51,34 @@ def _normalize_social_links(v: list) -> list:
 
 
 class VideoItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     url: str
     title: str = ""
     thumbnail: str = ""
 
 
 class TeamMember(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     name: str
     role: str = ""
+    # The frontend displays `bio`; the model sometimes writes `description`.
+    bio: str = ""
+    banner_color: str | None = None
     image_url: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _description_to_bio(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("description") and not data.get("bio"):
+            data = {**data, "bio": data["description"]}
+        return data
 
 
 class FAQItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     question: str
     answer: str
 
@@ -77,9 +99,12 @@ class FAQItem(BaseModel):
 
 
 class TestimonialItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     name: str = ""
     role: str = ""
     content: str  # was "quote" in earlier versions
+    rating: int | float | None = None
     image_url: str = ""
 
     @classmethod
@@ -98,12 +123,14 @@ SECTION_TYPES = Literal[
     "HERO", "ABOUT", "GALLERY", "FOOTER",
     "VIDEO", "VISION", "BLOG", "TEAM",
     "FAQ", "TESTIMONIALS", "CUSTOM", "RANKING",
-    "SUBSCRIPTION", "NEWSLETTER", "NOTES", "TEXTBLOCK",
+    "SUBSCRIPTION", "NEWSLETTER", "NOTES", "PODCAST", "TEXTBLOCK",
 ]
 
 
 class SectionBlock(BaseModel):
     """A single section in the V2 landing page content array."""
+
+    model_config = ConfigDict(extra="allow")
 
     type: SECTION_TYPES = Field(..., description="Section type string, e.g. 'HERO' (stored as string, serialized as int)")
     style: int = Field(1, description="Style variant number (see layout_policy for options per type)")
@@ -163,7 +190,17 @@ class SectionBlock(BaseModel):
             return v
         return _normalize_social_links(v)
 
+    # --- ABOUT socials (shown by Social 8 and Panel 1) ---
+    facebook: str | None = None
+    instagram: str | None = None
+    telegram: str | None = None
+    twitter: str | None = None
+    youtube: str | None = None
+    tiktok: str | None = None
+    website: str | None = None
+
     # --- VIDEO ---
+    video_mode: str | None = Field(None, description="'latest' | 'trending' | 'custom'")
     videos: list[VideoItem] | None = None
 
     # --- VISION ---
@@ -173,6 +210,10 @@ class SectionBlock(BaseModel):
     vision_description: str | None = None
     mission_title: str | None = None
     mission_description: str | None = None
+    goals_icon: str | None = None
+    vision_icon: str | None = None
+    mission_icon: str | None = None
+    extra_cards: list[dict[str, Any]] | None = Field(None, description="Cards 4-6: {title, description, icon, color}")
 
     # --- TEAM ---
     members: list[TeamMember] | None = None
@@ -193,7 +234,7 @@ class SectionBlock(BaseModel):
     authors: list[Any] | None = None
 
     # --- BLOG ---
-    feed_type: str | None = Field(None, description="BLOG only: 'trending' | 'latest'")
+    feed_type: str | None = Field(None, description="BLOG/NOTES: 'trending' | 'latest'; PODCAST: 'latest' | 'oldest'")
 
     # --- SUBSCRIPTION ---
     placeholder_text: str | None = None

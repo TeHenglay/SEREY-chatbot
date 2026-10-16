@@ -23,7 +23,12 @@ _api_key = os.getenv("GROK_API_KEY")
 # xAI Grok API endpoint (OpenAI-compatible)
 _GROK_BASE_URL = "https://api.x.ai/v1"
 _GROK_MODEL = "grok-3-mini"
-_GROK_BUILDER_MODEL = "grok-4.3"
+# Model for builder edits (patches, questions). Full page builds use their own
+# model — routes/builder_chat.py BUILDER_FULL_MODEL. Measured on full page builds
+# (2026-10-15, 8 runs each): grok-4.3 "medium" ~33s / ~$0.015, plainer copy;
+# grok-4.7 "low" ~40s / ~$0.029, clearly better copy and layout variety;
+# grok-4.7 on its default effort ~175s / ~$0.11 — past serey-api's 120s limit.
+_GROK_BUILDER_MODEL = os.getenv("GROK_BUILDER_MODEL", "grok-4.3")
 # Vision model for image-understanding calls. Override with GROK_VISION_MODEL
 # (e.g. "grok-2-vision-1212") if the default rejects image input.
 _GROK_VISION_MODEL = os.getenv("GROK_VISION_MODEL", "grok-4.3")
@@ -101,7 +106,9 @@ BUILDER_CALL_TIMEOUT_S = 90.0
 
 
 def empty_usage() -> dict:
-    return {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0}
+    # reasoning_tokens: grok-4.x "thinks" before answering; xAI reports those
+    # tokens apart from completion_tokens but bills them as output.
+    return {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
 
 
 def add_usage(total: dict, extra: dict) -> dict:
@@ -130,16 +137,26 @@ def _usage_counts(response) -> dict:
     if not usage:
         return empty_usage()
     cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
-    logger.info("Builder usage: prompt=%d cached=%d completion=%d", usage.prompt_tokens, cached, usage.completion_tokens)
+    reasoning = getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", 0) or 0
+    logger.info(
+        "Builder usage: prompt=%d cached=%d completion=%d reasoning=%d",
+        usage.prompt_tokens, cached, usage.completion_tokens, reasoning,
+    )
     return {
         "prompt_tokens": usage.prompt_tokens or 0,
         "cached_tokens": cached,
         "completion_tokens": usage.completion_tokens or 0,
+        "reasoning_tokens": reasoning,
     }
 
 
 def generate_builder_with_usage(
-    prompt: str, system: str | None = None, timeout: float = BUILDER_CALL_TIMEOUT_S
+    prompt: str,
+    system: str | None = None,
+    timeout: float = BUILDER_CALL_TIMEOUT_S,
+    reasoning_effort: str | None = None,
+    model: str | None = None,
+    temperature: float = 0.7,
 ) -> tuple[str, dict]:
     """Send a prompt to Grok using the builder model.
 
@@ -151,21 +168,31 @@ def generate_builder_with_usage(
     SDK-level retries are disabled (the default 2 retries also retry timeouts,
     tripling worst-case latency); this function retries once, on fast transient
     errors only, within the given timeout.
+
+    `reasoning_effort` ("low" | "medium" | "high") asks the model to think
+    longer before answering; None keeps the model's default. Measured on a
+    full page build (2026-10-15): default ~16s, medium ~29s, high ~80s.
     """
     client = _get_client().with_options(max_retries=0)
+    extra = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
     messages = _build_messages(prompt, system)
     deadline = time.monotonic() + timeout
     for attempt in range(2):
         try:
             response = client.chat.completions.create(
-                model=_GROK_BUILDER_MODEL,
+                model=model or _GROK_BUILDER_MODEL,
                 messages=messages,
-                temperature=0.7,
+                temperature=temperature,
                 # 4096 could truncate a large 7-section blueprint mid-JSON,
-                # guaranteeing a parse failure + retry + 422.
-                max_tokens=8192,
+                # guaranteeing a parse failure + retry + 422. Thinking needs
+                # room on top of the answer.
+                max_tokens=16000 if reasoning_effort else 8192,
+                # Every builder answer is one JSON object (routes/builder_chat.py,
+                # routes/builder.py); JSON mode stops prose/fence-wrapped replies.
+                response_format={"type": "json_object"},
                 timeout=max(deadline - time.monotonic(), 1.0),
                 extra_headers={"x-grok-conv-id": "serey-builder-v1"},
+                **extra,
             )
         except _TRANSIENT_ERRORS as e:
             # APITimeoutError subclasses APIConnectionError — never retry it.

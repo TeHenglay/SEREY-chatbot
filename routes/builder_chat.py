@@ -8,12 +8,12 @@ from copy import deepcopy
 from fastapi import APIRouter, HTTPException, Header, Depends
 from services.security import require_serey_origin
 from schemas.chat import (
-    BuilderChatRequest, ChatRequest, BuilderChatResponse, BuilderUsage, GeneratedImage, UploadNeeded,
+    BuilderChatRequest, ChatRequest, BuilderChatResponse, BuilderUsage, GeneratedImage, StyleSelection,
+    UploadNeeded,
 )
 from schemas.blueprint import PageBlueprint, PatchCommand
 from services import grok
 from services import image_gen
-from services import design_guidelines as design
 from services import section_catalog as catalog
 from services.layout_policy import (
     collect_rendered_upload_slots,
@@ -24,14 +24,29 @@ from services.layout_policy import (
     normalize_style,
     parse_frontend_style_map,
 )
-from services.blueprint_validator import existing_section_types, sanitize_content, sanitize_patch
+from services.blueprint_validator import (
+    apply_theme_to_code_sections,
+    inject_code_theme_vars,
+    is_neutral,
+    code_style_problems,
+    existing_section_types,
+    dead_controls,
+    page_code_keys,
+    sanitize_content,
+    sanitize_patch,
+    separate_adjacent_backgrounds,
+)
 from services.memory import append_session_turn, get_session_history_prompt
+from services.community_facts import get_community_facts
 import json
 import logging
 import os
+import random
 import re
+import threading
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -43,6 +58,20 @@ _CHAT_API_KEY = os.getenv("CHAT_API_KEY", "")
 _BUILDER_TIME_BUDGET_S = float(os.getenv("BUILDER_TIME_BUDGET_S", "110"))
 # A re-generation is only attempted if at least this much budget is left.
 _MIN_RETRY_BUDGET_S = 30.0
+# A quality re-generation of a full page takes ~30-40s, so it needs more room.
+_MIN_QUALITY_RETRY_BUDGET_S = 50.0
+# Full page builds: a stronger copywriter (grok-4.7), thinking on "low", and
+# more creative freedom. Measured (2026-10-15, 8 builds each): grok-4.7 "low"
+# ~40s with clearly better copy than grok-4.3 "medium" (~33s). Keep an effort
+# set for grok-4.7: on its default it thinks ~175s, past serey-api's 120s limit.
+# Edits stay on grok.BUILDER_MODEL (grok-4.3) with its default effort.
+BUILDER_FULL_MODEL = os.getenv("BUILDER_FULL_MODEL", "grok-4.7").strip()
+# Longest wait for the full-build model before falling back to grok-4.3
+# (~15-20s), and the budget that fallback needs.
+_FULL_BUILD_CALL_TIMEOUT_S = float(os.getenv("BUILDER_FULL_CALL_TIMEOUT_S", "65"))
+_MIN_FALLBACK_BUDGET_S = 30.0
+_FULL_BUILD_REASONING_EFFORT = os.getenv("BUILDER_FULL_REASONING_EFFORT", "low").strip().lower()
+_FULL_BUILD_TEMPERATURE = float(os.getenv("BUILDER_FULL_TEMPERATURE", "0.9"))
 _RETRY_NOTE_INVALID_JSON = (
     "\n\nIMPORTANT: your previous answer was not valid JSON. Reply with ONE valid JSON "
     "object only — no prose before or after it, no markdown fences."
@@ -105,7 +134,7 @@ _EXPLICIT_RESTORE_RE = re.compile(
 # revert ("undo the color change on the hero only", "restore my old logo").
 _PARTIAL_QUALIFIER_RE = re.compile(
     r"\b(only|just|except|section|hero|footer|gallery|galleries|team|about|faq|testimonial(s)?"
-    r"|vision|video|blog|ranking|subscription|newsletter|custom|map|countdown"
+    r"|vision|video|blog|ranking|subscription|newsletter|notes|podcast|custom|map|countdown"
     r"|logo|title|subtitle|heading|button|menu|font|image|photo|picture|mockup|screenshot)\b",
     re.IGNORECASE,
 )
@@ -459,10 +488,14 @@ def _revert_reply(message: str, lang: str | None, *, apologetic: bool = True) ->
 
 
 # ---------------------------------------------------------------------------
-# First-build image fill — when the onboarding intake arrives with NO user
-# images, the hero and about photos are generated (services/image_gen.py) so
-# the page keeps the template's image layouts instead of text-only fallbacks.
-# Only the key slots, only once: everything else stays upload / ask-first.
+# First-build image fill — on the onboarding intake, photos the user did not
+# upload are generated (services/image_gen.py) so the page keeps image layouts
+# instead of text-only fallbacks:
+#   HERO  — whenever no banner/cover image was uploaded, even if the user
+#           uploaded product photos (those go to the gallery, not the hero);
+#   ABOUT — only when the user uploaded no photos at all (otherwise the about
+#           section can use one of theirs).
+# Only these slots, only once: everything else stays upload / ask-first.
 # The temporary image URLs are made permanent by the Next.js builder proxy.
 # ---------------------------------------------------------------------------
 
@@ -486,6 +519,12 @@ _ATTACHED_PHOTO_RE = re.compile(
     r"https?://[^\s\"'<>\)\]]+",
     re.IGNORECASE | re.MULTILINE,
 )
+# Just the intake's "Banner images:" field (the hero/cover photos).
+_BANNER_FIELD_RE = re.compile(
+    r"^\s*Banner images:[ \t]*(.*?)(?="
+    r"^\s*[A-Za-z][^:\r\n]{0,80}:[ \t]*|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
 # (section, field, image style to switch to when the AI's chosen style renders no image)
 _AUTO_IMAGE_SLOTS = (("HERO", "image_url", 1), ("ABOUT", "image_url", 8))
 _MIN_IMAGE_BUDGET_S = 20.0
@@ -507,14 +546,864 @@ def _user_uploaded_photos(message: str) -> bool:
     )
 
 
-def _wants_auto_images(message: str) -> bool:
+# Gallery photos already on the page (buildPageContext: 'item 1 "Loaf" image_url: "https://…"').
+_PAGE_GALLERY_PHOTO_RE = re.compile(r'\bitem \d+ "[^"\n]*" image_url: "https?://')
+
+
+# Gallery item photos in the page context ('item 3 "Name" image_url: "…"'). Hero
+# and about images are left out: on a rebuild they are often AI-generated.
+_PAGE_PHOTO_URL_RE = re.compile(r'\bitem \d+ "[^"\n]*" image_url: "(https?://[^"\s]+)"')
+# This many photos or more: the full build's Code section is a photo gallery.
+_PHOTO_GALLERY_MIN = int(os.getenv("BUILDER_PHOTO_GALLERY_MIN", "7"))
+_PHOTO_GALLERY_MAX = 10
+
+
+def _user_photo_urls(message: str, page_context: str | None) -> list[str]:
+    """The user's photos, in order and without duplicates: uploaded with this
+    message (onboarding fields, [image: …], attachments) and already in the
+    page's galleries. The logo does not count."""
+    message = message or ""
+    logos = {m.group(1).rstrip(".,;") for m in _LOGO_URL_RE.finditer(message)}
+    page_logo = re.findall(r"\blogo_url\"?\s*[:=]\s*\"?(https?://[^\s\"'<>\)\]]+)", page_context or "")
+    logos |= {u.rstrip(".,;") for u in page_logo}
+    urls: list[str] = []
+    for url in _extract_message_image_urls(message) + _PAGE_PHOTO_URL_RE.findall(page_context or ""):
+        url = url.rstrip(".,;")
+        if url not in logos and url not in urls and not _NON_IMAGE_HOST_RE.search(url):
+            urls.append(url)
+    return urls
+
+
+def _user_has_photos(message: str, page_context: str | None) -> bool:
+    """Photos for a photo gallery: uploaded in this message (onboarding fields,
+    [image: …], a chat attachment — the logo does not count) or already in the
+    page's gallery."""
+    message = message or ""
+    if _user_uploaded_photos(message):
+        return True
+    logos = {m.group(1).rstrip(".,;") for m in _LOGO_URL_RE.finditer(message)}
+    if any(url not in logos for url in _extract_message_image_urls(message)):
+        return True
+    return bool(_PAGE_GALLERY_PHOTO_RE.search(page_context or ""))
+
+
+def _community_facts_note(facts: dict[str, Any], has_photos: bool) -> str:
+    """What the community has, as a note at the end of the user message (it must
+    outweigh an onboarding intake's fixed section list)."""
+    lines: list[str] = []
+    if facts.get("has_shop") is True:
+        name = f' ("{facts["shop_name"]}")' if facts.get("shop_name") else ""
+        lines.append(
+            f"- Online shop: yes{name}. A full page build must include a product section: a GALLERY with "
+            "section_subtype \"product\" — it shows the shop's products itself, so send only its title and description."
+        )
+    elif facts.get("has_shop") is False:
+        lines.append("- Online shop: none. Do not put a product section (GALLERY \"product\") in a full page build.")
+    episodes = facts.get("podcast_episodes")
+    if isinstance(episodes, int) and episodes > 0:
+        lines.append(f"- Podcast: {episodes} episodes. A full page build must include a PODCAST section.")
+    if not has_photos:
+        lines.append(
+            "- Photos uploaded by the user: none. Do not put a photo gallery (GALLERY \"gallery\" or \"project\") "
+            "in a full page build."
+        )
+    elif facts.get("has_shop") is True:
+        lines.append(
+            "- With both a photo gallery and a product section, the photo gallery is instance_key \"gallery\" and "
+            "the product section \"gallery__2\"."
+        )
+    if not lines:
+        return ""
+    return (
+        "\n\n(Community facts, checked by the service — they override any fixed section list above, including "
+        "\"Do not add or remove any sections\":\n" + "\n".join(lines) + ")"
+    )
+
+
+# Onboarding product lines with an uploaded photo ("Product 1: … [image: URL]").
+_PRODUCT_PHOTO_LINE_RE = re.compile(r"^\s*Product \d+:.*\[image:\s*https?://", re.IGNORECASE | re.MULTILINE)
+# The intake text calls GALLERY a "Product/Services section" that "renders as
+# product cards", which beats the system prompt's photo-gallery rule — so the
+# rule is repeated at the end of the user message, where it outweighs it.
+_ONBOARDING_PHOTO_GALLERY_NOTE = (
+    "\n\n(Service note — overrides \"this renders as product cards\": the user uploaded photos with their "
+    "Product lines, so the GALLERY is a photo gallery. Set its section_subtype to \"gallery\" (not "
+    "\"product\") and give it one images[] item per Product line: its name, description and [image: ...] URL "
+    "as image_url. Add no other photo gallery; a product section only as the community facts below say.)"
+)
+
+
+# Newer frontends write the photo-gallery rule into the intake themselves
+# (buildAiIntakePrompt "GALLERY (photo gallery): ..."); the note is only for
+# older ones. Delete the note once every deployed frontend sends that line.
+_INTAKE_HAS_PHOTO_RULE_RE = re.compile(r"GALLERY \(photo gallery\):", re.IGNORECASE)
+
+
+def _onboarding_photo_gallery_note(message: str) -> str:
+    message = message or ""
+    if (
+        _ONBOARDING_FINAL_RE.search(message)
+        and _PRODUCT_PHOTO_LINE_RE.search(message)
+        and not _INTAKE_HAS_PHOTO_RULE_RE.search(message)
+    ):
+        return _ONBOARDING_PHOTO_GALLERY_NOTE
+    return ""
+
+
+# The wizard may skip the contact question. The intake's own reply instruction
+# ("say the page is ready, offer to refine it") then wins over the system
+# prompt's "say in reply that they can add it" — so it is repeated here.
+# buildAiIntakePrompt writes "Contact information:\n<value>" and leaves the label
+# out entirely when the user gave none.
+_CONTACT_LINE_RE = re.compile(r"^\s*Contact information:", re.IGNORECASE | re.MULTILINE)
+_ONBOARDING_NO_CONTACT_NOTE = (
+    "\n\n(Service note: the user gave no contact details. Leave FOOTER email, phone, location and social_links "
+    "out — never invent them — and in your reply also tell the user, in one short sentence, that they can add "
+    "their contact details and social links in the footer.)"
+)
+
+
+def _onboarding_contact_note(message: str) -> str:
+    message = message or ""
+    if _ONBOARDING_FINAL_RE.search(message) and not _CONTACT_LINE_RE.search(message):
+        return _ONBOARDING_NO_CONTACT_NOTE
+    return ""
+
+
+# "Product 1: <name> — <description> [image: <url>]", as LandingBuilderV2.js
+# writes it (description and image are optional).
+_PRODUCT_LINE_RE = re.compile(
+    r"^\s*Product \d+:[ \t]*(?P<name>[^\r\n]*?)(?:[ \t]+—[ \t]+(?P<desc>[^\r\n]*?))?[ \t]*"
+    r"(?:\[image:\s*(?P<url>https?://[^\s\]]+)\s*\])?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Photo-gallery layouts that need at least this many photos to look right
+# (catalog "Picking layouts": Feature R / Feature Strip 5, Bento 6, Mosaic Grid 7).
+_GALLERY_MIN_PHOTOS = {2: 5, 8: 5, 3: 6, 9: 7}
+
+
+def _ensure_onboarding_photo_gallery(
+    content: list[dict[str, Any]], message: str, has_shop: bool | None = None
+) -> None:
+    """Safety net for the onboarding intake: when the user uploaded photos with
+    their Product lines, the page has a photo GALLERY holding them. Without a
+    shop the page's GALLERY becomes that photo gallery; with a shop the product
+    section stays and the photo gallery is added next to it.
+
+    The frontend keeps a photo gallery only when section_subtype is exactly
+    "gallery", and refills a missing image_url from the same position in its
+    upload list — so the items must be one per Product line, in order, each
+    with that line's exact URL. The model's own name/description are kept."""
+    message = message or ""
+    if not _ONBOARDING_FINAL_RE.search(message):
+        return
+    items = [
+        {"image_url": m["url"] or "", "name": m["name"].strip(), "description": (m["desc"] or "").strip()}
+        for m in _PRODUCT_LINE_RE.finditer(message)
+        if m["name"].strip() or m["url"]
+    ]
+    if not any(i["image_url"] for i in items):
+        return
+    galleries = [s for s in content if normalize_section_type(s.get("type")) == "GALLERY"]
+    gallery = next((g for g in galleries if g.get("section_subtype") == "gallery"), None)
+    if gallery is None:
+        first = galleries[0] if galleries else None
+        if first is None:
+            return
+        if has_shop is True and first.get("section_subtype") == "product":
+            gallery = {"type": "GALLERY", "section_subtype": "gallery", "style": 1, "is_hidden": False}
+            if isinstance(first.get("colors"), dict):
+                gallery["colors"] = dict(first["colors"])
+            content.insert(content.index(first), gallery)
+            logger.warning("Onboarding photos: added a photo GALLERY next to the shop's product section")
+        else:
+            logger.warning("Onboarding photos: switched GALLERY from %r to a photo gallery", first.get("section_subtype"))
+            first["section_subtype"] = "gallery"
+            gallery = first
+
+    model_items = [i for i in gallery.get("images") or [] if isinstance(i, dict)]
+    by_url = {i.get("image_url"): i for i in model_items if i.get("image_url")}
+    merged: list[dict[str, Any]] = []
+    for idx, line in enumerate(items):
+        # The model's item for this line: same URL, else same position without a URL
+        own = by_url.get(line["image_url"]) if line["image_url"] else None
+        if own is None and idx < len(model_items) and not model_items[idx].get("image_url"):
+            own = model_items[idx]
+        own = own or {}
+        merged.append({
+            **own,
+            "image_url": line["image_url"],
+            "name": str(own.get("name") or "").strip() or line["name"],
+            "description": str(own.get("description") or "").strip() or line["description"],
+        })
+    if [i.get("image_url") for i in model_items] != [i["image_url"] for i in merged]:
+        logger.warning(
+            "Onboarding photos: GALLERY items did not match the %d Product lines (order/URLs) — realigned",
+            len(items),
+        )
+    gallery["images"] = merged
+    photos = sum(1 for i in gallery["images"] if isinstance(i, dict) and i.get("image_url"))
+    try:
+        style = int(gallery.get("style") or 1)
+    except (TypeError, ValueError):
+        style = 1
+    if photos < _GALLERY_MIN_PHOTOS.get(style, 0):
+        gallery["style"] = 1  # Classic — fits any number of photos
+
+
+def _apply_community_facts(content: list[dict[str, Any]], facts: dict[str, Any], has_photos: bool) -> None:
+    """Safety net for a full page build, enforcing the community facts the model
+    was told about: no photo gallery without photos, a product section only
+    with an online shop (and always with one), a PODCAST section when the
+    community has episodes. Added sections leave title/description out so the
+    frontend fills in its defaults."""
+    def _type(s: dict[str, Any]) -> str:
+        return normalize_section_type(s.get("type"))
+
+    def _has_photo(g: dict[str, Any]) -> bool:
+        return any(isinstance(i, dict) and i.get("image_url") for i in g.get("images") or [])
+
+    for g in [s for s in content if _type(s) == "GALLERY"]:
+        product = g.get("section_subtype") == "product"
+        if not product and not has_photos and not _has_photo(g):
+            logger.warning("Community facts: removed a photo GALLERY — the user has no photos")
+            content.remove(g)
+        elif product and facts.get("has_shop") is False:
+            logger.warning("Community facts: removed the product GALLERY — the community has no online shop")
+            content.remove(g)
+        elif product and facts.get("has_shop") is not True and not has_photos and not _has_photo(g):
+            # Shop unknown and no images: the cards would show empty image boxes.
+            logger.warning("Community facts: removed a product GALLERY — no shop confirmed and no images")
+            content.remove(g)
+
+    middle = [s for s in content if _type(s) not in ("HERO", "FOOTER")]
+    colors = next((dict(s["colors"]) for s in middle if isinstance(s.get("colors"), dict)), None)
+    footer_at = next((i for i, s in enumerate(content) if _type(s) == "FOOTER"), len(content))
+
+    def _add(section: dict[str, Any], why: str) -> None:
+        nonlocal footer_at
+        if colors:
+            section["colors"] = dict(colors)
+        content.insert(footer_at, section)
+        footer_at += 1
+        logger.warning("Community facts: added %s", why)
+
+    if facts.get("has_shop") is True and not any(
+        _type(s) == "GALLERY" and s.get("section_subtype") == "product" for s in content
+    ):
+        _add({"type": "GALLERY", "section_subtype": "product", "style": 5, "is_hidden": False},
+             "a product GALLERY for the community's online shop")
+    episodes = facts.get("podcast_episodes")
+    if isinstance(episodes, int) and episodes > 0 and not any(_type(s) == "PODCAST" for s in content):
+        _add({"type": "PODCAST", "style": 1, "feed_type": "latest", "is_hidden": False},
+             f"a PODCAST section ({episodes} episodes)")
+
+    # Photo gallery first ("gallery"), then the product section ("gallery__2"):
+    # the frontend's onboarding merge puts the uploads into the "gallery" instance.
+    galleries = [s for s in content if _type(s) == "GALLERY"]
+    if any(g.get("section_subtype") == "product" for g in galleries) and any(
+        g.get("section_subtype") != "product" for g in galleries
+    ):
+        ordered = [g for g in galleries if g.get("section_subtype") != "product"] + [
+            g for g in galleries if g.get("section_subtype") == "product"
+        ]
+        for n, g in enumerate(ordered, start=1):
+            g["instance_key"] = "gallery" if n == 1 else f"gallery__{n}"
+
+
+# ---------------------------------------------------------------------------
+# Full page builds: code blocks + quality check
+# ---------------------------------------------------------------------------
+
+# A request for a whole page (EN/NL), like the frontend's FULL_PAGE_RE plus
+# "build/create/make … landing page / website / homepage".
+_FULL_BUILD_RE = re.compile(
+    r"\b(whole|complete|full|entire|new|hele|volledige|nieuwe)\s+(?:[\w-]+\s+){0,2}"
+    r"(landing\s*page|landingspagina|home\s*page|homepage|page|pagina|website|site)\b"
+    r"|\b(build|create|make|generate|design|redesign|rebuild|bouw|maak|ontwerp)\b[^.?!\n]{0,40}"
+    r"\b(landing\s*page|landingspagina|home\s*page|homepage|website|site|webpagina)\b"
+    # Khmer: build / make / design (បង្កើត / ធ្វើ / រចនា) … website / page (គេហទំព័រ / វេបសាយ / ទំព័រ)
+    r"|(?:បង្កើត|ធ្វើ|រចនា)[^.?!\n។]{0,40}(?:គេហទំព័រ|វេបសាយ|វ៉ិបសាយ|ទំព័រ)",
+    re.IGNORECASE,
+)
+
+
+def _is_full_build_request(message: str) -> bool:
+    message = message or ""
+    return bool(_ONBOARDING_FINAL_RE.search(message) or _FULL_BUILD_RE.search(message))
+
+
+_FULL_BUILD_CODE_BLOCKS_NOTE = (
+    "\n\n(Service note for this full page build — overrides \"Don't add code blocks to a full page build unless "
+    "asked\" and any rule against sending type 11: make the page feel designed, not templated. Be creative: a distinctive palette that suits this "
+    "brand, an unexpected but fitting mix of layouts (no two pages alike), copy with personality — always within "
+    "the rules above. Two sections next to each other never share the same background colour — alternate the "
+    "palette's tints down the page. A FAQ has at least 4 questions. Write no opening hours, times, years, prices, addresses or "
+    "phone numbers the user did not give — the page is checked for them. Add ONE Custom Code section to "
+    "`content` (it counts as one of the middle sections), right after the section it relates to: "
+    "{\"type\": 11, \"html\": \"...\", \"colors\": {\"bg\": \"<hex>\"}} — no code_blocks. Its html is real content "
+    "about THIS brand, built only from what the user described (their products, services, how it works, what "
+    "makes them different). For this page use this format: {format}. Make it look designed: the page's colours "
+    "and fonts (a Google Fonts <link> is fine), clear hierarchy, balanced spacing (one centred wrapper, equal "
+    "padding top and bottom, equal gaps), responsive (max-width: 100%; items stack on phones), its height set by "
+    "the content (no vh heights). Colour it only with the CSS variables var(--page-text), var(--page-muted), "
+    "var(--page-accent), var(--page-card) and var(--page-line) (the service fills them in for the background it "
+    "lands on). Open it with a short uppercase eyebrow, a heading in the page's heading "
+    "font and one line of intro, then the component; label every shape, chart or icon so nothing is a bare "
+    "decoration. Bring it to life: a subtle entrance animation and smooth hover/active "
+    "transitions (CSS, with @media (prefers-reduced-motion: reduce) turning them off). Interactive is welcome "
+    "when it works — every clickable part must visibly change something inside the section through an inline "
+    "<script> (show a panel, turn a wheel, open an item); no links, forms or buttons that lead nowhere. No emoji, "
+    "no gradients, no pill badges, no mention of AI. Never invent facts in it (no prices, times, dates, numbers, "
+    "reviews or names the user did not give). One self-contained snippet with an inline <style> and <script>; "
+    "no images except uploaded URLs.)"
+)
+# Code section formats per kind of landing page. A format is drawn from a
+# shuffle bag per page kind: every format is used once, in random order,
+# before any repeats (and never twice in a row within a chat session) — with a
+# single example the model made the same 3 cards on every page, and plain
+# random draws still repeated often. Interactive formats go in the bag twice,
+# so about two in three pages get one. Live examples of every format:
+# https://claude.ai/artifact/2aQGea4gs3HAT5ULrfMPNJ
+_ALL_KINDS = ("shop", "business", "news", "creator", "community", "education", "podcast", "portfolio",
+              "food", "events")
+# (key, interactive, kinds or ("any",), needs uploaded photos, instruction)
+_CODE_FORMATS: tuple[tuple[str, bool, tuple[str, ...], bool, str], ...] = (
+    # --- Animated, no clicking needed ---
+    ("cards", False, ("any",), False,
+     "three cards side by side, each with a small inline-SVG line icon that draws itself in, a short title and "
+     "one sentence"),
+    ("steps", False, ("business", "community", "education", "events", "food", "shop"), False,
+     "numbered steps (3 or 4) showing how it works for the visitor, joined by a line that fills as the visitor "
+     "scrolls past"),
+    ("banner", False, ("any",), False,
+     "a wide highlight banner: one bold statement of the brand's promise with a short supporting line and a "
+     "decorative SVG shape that slowly drifts"),
+    ("split", False, ("business", "community", "creator", "education", "shop"), False,
+     "a two-column split: on one side who it is for, on the other what the visitor gets — short lines with "
+     "check marks"),
+    ("iconrow", False, ("any",), False,
+     "an icon row of 4 short highlights (inline-SVG line icon that draws itself in + 2–4 words each) on a thin rule"),
+    ("checklist", False, ("community", "education", "events", "food", "podcast"), False,
+     "a \"what to expect\" checklist of 4–5 short items in a soft panel, ticks drawing in one after another"),
+    ("timeline", False, ("business", "community", "food", "portfolio", "shop"), False,
+     "a process timeline of 3–4 named stages (how it is made, how a visit or project goes), its line filling "
+     "as the visitor scrolls — no times or dates"),
+    ("ticker", False, ("creator", "food", "podcast", "shop"), False,
+     "a thin band of 4–6 short brand phrases scrolling slowly sideways, pausing on hover, between two "
+     "decorative rules"),
+    ("waveform", False, ("podcast",), False,
+     "the show's promise beside an animated audio waveform (CSS bars rising and falling) and three short lines "
+     "on what listeners get"),
+    # --- Interactive: the inline script makes every control work ---
+    ("wheel", True, ("community", "creator", "education", "events", "food", "podcast"), False,
+     "an interactive wheel beside a detail card. The wheel: 4–8 equal segments (seasons, topics, content "
+     "pillars or modules) drawn as SVG ring paths in a 320×320 viewBox (outer radius 150, inner radius 72, "
+     "computed in the script), max-width 360px, separated by 3px strokes in the section background colour. "
+     "Every segment carries a short uppercase label (1–2 words, 11–12px, letter-spacing .06em) centred on the "
+     "ring. All segments use the accent colour: inactive ones at fill-opacity .30 and .45 alternating with "
+     "labels in the text colour, the active one at full accent with a white label, scaled 1.04 from the centre "
+     "(never moved outward). The hub: a circle (radius 64) in the card colour with a 1px border and the wheel's "
+     "name in the heading font. The detail card: the active segment's title, one or two sentences and a small "
+     "\"2 / 6\" counter, fading in on change, with a quiet hint line \"Click a segment\" under it. Segments "
+     "are focusable (tabindex 0, role button, Enter or Space); the first one starts active. Two columns on "
+     "desktop, stacked on phones"),
+    ("tabs", True, ("any",), False,
+     "tabs: 3–4 tab buttons for the things the user offers; clicking one swaps the panel below with a short fade"),
+    ("accordion", True, ("community", "education", "events", "food", "podcast", "shop"), False,
+     "an accordion of 4–5 items (how it works, what to expect): click a row to open it with a smooth height "
+     "transition, one open at a time"),
+    ("flip", True, ("any",), False,
+     "flip cards: 3–4 cards that turn over on click to show a short explanation on the back"),
+    ("stepper", True, ("business", "community", "education", "events", "portfolio", "shop"), False,
+     "a stepper: one step shown at a time with previous/next arrows and step dots, sliding between 3–5 steps"),
+    ("filter", True, ("education", "food", "news", "podcast", "portfolio", "shop"), False,
+     "a filter grid: 3–4 category chips that really filter 6 cards of the user's offerings (an \"All\" chip "
+     "first), cards fading in as they appear"),
+    ("picker", True, ("business", "creator", "education", "food", "podcast", "shop"), False,
+     "a \"which one is for you?\" picker: 2 questions with tap answers (buttons, not a form) that recommend one "
+     "of the user's real offerings in a result card"),
+    ("diagram", True, ("business", "education", "food", "shop"), False,
+     "a labelled diagram: an SVG drawing of the product or process with 3–4 numbered points that light up the "
+     "matching explanation beside it"),
+    ("toggle", True, ("business", "community", "creator", "education", "shop"), False,
+     "a two-way toggle between two audiences (for example beginners / regulars, fans / brands) that swaps three "
+     "short cards"),
+    ("panels", True, ("community", "creator", "events", "food", "portfolio", "shop"), False,
+     "expanding panels: 4 narrow panels in a row (collections, looks or stages), the hovered or clicked one "
+     "widening to show its text (a column on phones)"),
+    ("swatches", True, ("shop",), False,
+     "a product spotlight: a CSS/SVG drawing of one product the user sells with 3–4 variant swatches that switch "
+     "its colour, name and short description — only variants the user described"),
+    ("bundle", True, ("food", "shop"), False,
+     "a bundle builder: tap 3–5 of the user's products to add them to a box; a summary beside it lists the picks "
+     "(no prices)"),
+    ("glossary", True, ("community", "education", "news"), False,
+     "an explainer paragraph with 3–5 key terms underlined; clicking a term opens its plain-language "
+     "definition below the text"),
+    ("briefing", True, ("news",), False,
+     "\"the story so far\": 3–5 short briefing cards on what the platform covers, one at a time, with a "
+     "progress bar and next/previous arrows"),
+    ("topics", True, ("news", "podcast"), False,
+     "a topic guide: topic chips that switch a list of 3–4 themes the user covers; a small CSS waveform or "
+     "pulse animates beside the active topic"),
+    ("flashcards", True, ("education",), False,
+     "a deck of 4–6 flashcards on the subject the user teaches: click to flip, arrows to move, a \"2 / 6\" count"),
+    ("path", True, ("community", "education"), False,
+     "a learning or member path: 4–6 connected nodes on an SVG line; clicking a node shows what that stage "
+     "covers"),
+    ("collab", True, ("creator",), False,
+     "a \"work with me\" tab set: 2–4 kinds of collaboration the user offers, each panel with what a brand or "
+     "fan gets"),
+    ("beforeafter", True, ("food", "portfolio", "shop"), True,
+     "a before/after slider: two of the user's uploaded photos stacked, a draggable handle revealing one over "
+     "the other"),
+    ("hotspots", True, ("food", "portfolio", "shop"), True,
+     "an uploaded photo with 3–4 pins; tapping a pin shows a short label about that part of the picture"),
+)
+
+# Onboarding "Platform type:" answers -> page kind
+_PLATFORM_KINDS = {
+    "online shop": "shop", "personal brand": "creator", "business website": "business",
+    "blog or news platform": "news", "creator or influencer page": "creator", "community platform": "community",
+    "educational platform": "education", "podcast or media platform": "podcast",
+    "portfolio website": "portfolio", "restaurant or cafe": "food", "nonprofit or organization": "community",
+    "event or booking platform": "events",
+}
+# Chat requests: words that point to a kind (EN/NL/KM)
+_KIND_WORDS = {
+    "shop": r"shop|store|webshop|e-?commerce|sell\w*|products?|winkel|boutique|cloth\w*|fashion|apparel|"
+            r"garments?|kleding|jewel\w*|cosmetics|skincare|ហាង|លក់|សម្លៀកបំពាក់",
+    "business": r"business|company|agency|services?|consult\w*|firm|bedrijf|ក្រុមហ៊ុន",
+    "news": r"news|magazine|journal\w*|publisher|articles?|blog|nieuws|ព័ត៌មាន",
+    "creator": r"creator|influencer|youtuber|tiktok|instagram|streamer|vlog\w*|personal brand",
+    "community": r"community|association|club|ngo|non-?profit|foundation|members|volunteer\w*|vereniging|សហគមន៍",
+    "education": r"course|school|academy|classes|tutor\w*|training|lessons?|students|cursus|សាលា|វគ្គ",
+    "podcast": r"podcast|episodes?|listeners",
+    "portfolio": r"portfolio|photograph\w*|designer|illustrat\w*|architect\w*|freelanc\w*",
+    "food": r"restaurant|cafe|café|coffee|bakery|kitchen|menu|catering|food|eten|ភោជនីយដ្ឋាន|កាហ្វេ",
+    "events": r"events?|festival|conference|booking|tickets?|wedding|concert",
+}
+_KIND_RES = {k: re.compile(rf"\b(?:{v})\b", re.IGNORECASE) for k, v in _KIND_WORDS.items()}
+_PLATFORM_TYPE_RE = re.compile(r"^Platform type:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_USER_ANSWER_RE = re.compile(r"^(?:Brand name|Platform details):\s*(.*(?:\n(?![A-Z][\w ]+:|- |\s*$).*)*)", re.MULTILINE)
+
+
+def _page_kind(message: str, facts: dict[str, Any] | None = None) -> str:
+    """The kind of landing page being built (shop, podcast, news, ...), or
+    "any". The onboarding wizard's "Platform type:" wins; otherwise words in the
+    user's own text plus the community facts (a shop, podcast episodes)."""
+    message = message or ""
+    m = _PLATFORM_TYPE_RE.search(message)
+    if m and m.group(1).strip().lower() in _PLATFORM_KINDS:
+        return _PLATFORM_KINDS[m.group(1).strip().lower()]
+    # Onboarding text also lists every template's description: read only the answers.
+    text = " ".join(_USER_ANSWER_RE.findall(message)) if _ONBOARDING_FINAL_RE.search(message) else message
+    scores = {k: len(r.findall(text)) for k, r in _KIND_RES.items()}
+    facts = facts or {}
+    if isinstance(facts.get("podcast_episodes"), int) and facts["podcast_episodes"] > 0:
+        scores["podcast"] += 2
+    if facts.get("has_shop") is True:
+        scores["shop"] += 1
+    kind, score = max(scores.items(), key=lambda kv: kv[1])
+    return kind if score > 0 else "any"
+
+
+def _formats_for(kind: str, has_photos: bool) -> list[tuple[str, str]]:
+    """(key, instruction) of every format that fits this kind of page."""
+    return [
+        (key, text) for key, _interactive, kinds, needs_photos, text in _CODE_FORMATS
+        if (kind == "any" or "any" in kinds or kind in kinds) and (has_photos or not needs_photos)
+    ]
+
+
+_last_code_block_format: dict[str, tuple[float, str]] = {}
+_code_block_format_bags: dict[tuple[str, bool], list[str]] = {}
+_code_block_format_lock = threading.Lock()
+
+
+# Colours are Bob's choice ("Let AI choose" in onboarding, or a build request
+# that names no colour): the frontend then sends no theme, and the model fell
+# back to white middle sections that the adjacent-background fix turned grey.
+_THEME_CHOSEN_RE = re.compile(r"Theme colou?r chosen by the user", re.IGNORECASE)
+_COLOUR_WISH_RE = re.compile(
+    r"#[0-9a-f]{3}\b|#[0-9a-f]{6}\b|\b(?:colou?rs?|palette|theme|white|gr[ae]y|black|red|blue|green|yellow|orange|"
+    r"purple|violet|pink|brown|beige|cream|gold|silver|navy|teal|turquoise|cyan|maroon|olive|lime|coral|"
+    r"pastel|monochrome|minimal(?:ist)?|neutral|kleur(?:en)?|wit|grijs|zwart|rood|blauw|groen|geel|oranje|"
+    r"paars|roze|bruin)\b|ពណ៌",
+    re.IGNORECASE,
+)
+
+
+def _ai_picks_colours(message: str) -> bool:
+    """True when the user left the colours to Bob: no theme chosen in the
+    onboarding wizard and no colour named in the request ("Brand colors:" from
+    the wizard counts as named)."""
+    message = message or ""
+    if _THEME_CHOSEN_RE.search(message):
+        return False
+    if _ONBOARDING_FINAL_RE.search(message):
+        # The wizard's own instructions talk about colours and palettes: only
+        # the user's answers count.
+        return not re.search(r"^Brand colou?rs?:\s*\S", message, re.IGNORECASE | re.MULTILINE)
+    return not _COLOUR_WISH_RE.search(message)
+
+
+# Curated themes — mirrors fe-serey-web LandingBuilderV2.js CURATED_THEMES and
+# applyCuratedThemeToSections(): hero and middle sections alternate section_bg /
+# bg_alt in page order, the footer gets a dark variant of bg_alt. When the user
+# leaves the colours to Bob (no theme, no colour named) the service draws one at
+# random: left to choose, the model picked white/light pages every time.
+# Themes whose two backgrounds are both light are left out of the draw.
+_CURATED_THEMES: tuple[dict[str, str], ...] = (
+    {"id": "midnight-slate", "label": "Midnight & Slate", "accent": "#38bdf8", "section_bg": "#1e293b", "bg_alt": "#111827"},
+    {"id": "cherry-cream", "label": "Cherry & Cream", "accent": "#670626", "section_bg": "#f7f1ea", "bg_alt": "#670626"},
+    {"id": "ice-chocolate", "label": "Ice & Chocolate", "accent": "#47230f", "section_bg": "#b5d0f3", "bg_alt": "#47230f"},
+    {"id": "modern-azure", "label": "Modern Azure", "accent": "#000f0f", "section_bg": "#68c7ec", "bg_alt": "#000f0f"},
+    {"id": "milk-sea", "label": "Milk & Sea", "accent": "#1d1c73", "section_bg": "#f8f6fd", "bg_alt": "#1d1c73"},
+    {"id": "cherry-matcha", "label": "Cherry & Matcha", "accent": "#670626", "section_bg": "#bad797", "bg_alt": "#670626"},
+    {"id": "royal-cobalt-glacier-mist", "label": "Royal Cobalt & Glacier Mist", "accent": "#014aad", "section_bg": "#cbdfee", "bg_alt": "#014aad"},
+    {"id": "french-blue-creamy-avocado", "label": "French Blue & Creamy Avocado", "accent": "#0055a4", "section_bg": "#dcf4a2", "bg_alt": "#0055a4"},
+    {"id": "icing-warm-wood", "label": "Icing & Warm Wood", "accent": "#3b1b0e", "section_bg": "#dcc099", "bg_alt": "#3b1b0e"},
+    {"id": "saffron-ink", "label": "Saffron & Ink", "accent": "#b7791f", "section_bg": "#fdf1d3", "bg_alt": "#1f2a44"},
+    {"id": "jade-rice-paper", "label": "Jade & Rice Paper", "accent": "#0f7a5c", "section_bg": "#edf6f0", "bg_alt": "#0f5c4a"},
+    {"id": "lotus-plum", "label": "Lotus & Plum", "accent": "#a8326e", "section_bg": "#fbeef3", "bg_alt": "#5b1d4a"},
+    {"id": "mekong-sunset", "label": "Mekong Sunset", "accent": "#c2410c", "section_bg": "#ffe8d9", "bg_alt": "#8a2f12"},
+    {"id": "ocean-sand", "label": "Ocean & Sand", "accent": "#0e7490", "section_bg": "#f2e8d5", "bg_alt": "#0b4f6c"},
+    {"id": "lime-charcoal", "label": "Lime & Charcoal", "accent": "#4d7c0f", "section_bg": "#eef4d4", "bg_alt": "#232624"},
+    {"id": "lavender-night", "label": "Lavender & Night", "accent": "#5b4bc4", "section_bg": "#ebe7fb", "bg_alt": "#2b2757"},
+    {"id": "mango-leaf", "label": "Mango & Leaf", "accent": "#b45309", "section_bg": "#fff0c2", "bg_alt": "#2f5d32"},
+)
+_last_build_theme: dict[str, tuple[float, str]] = {}
+
+
+def _pick_build_theme(session_id: str = "") -> dict[str, str]:
+    """A random curated theme, never the one this chat session got last."""
+    last = _last_build_theme.get(session_id, (0.0, ""))[1]
+    theme = random.choice([t for t in _CURATED_THEMES if t["id"] != last] or list(_CURATED_THEMES))
+    if session_id:
+        _remember_session_value(_last_build_theme, session_id, theme["id"])
+    return theme
+
+
+def _hex_luminance(hex_color: str) -> float:
+    h = hex_color.lstrip("#")
+    def lin(v: str) -> float:
+        c = int(v, 16) / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * lin(h[0:2]) + 0.7152 * lin(h[2:4]) + 0.0722 * lin(h[4:6])
+
+
+def _theme_text(bg: str) -> dict[str, str]:
+    # Same split as the frontend's themeTextColorsFor(): ~0.179 is where dark and
+    # light text have equal contrast.
+    if _hex_luminance(bg) > 0.179:
+        return {"title": "#0f172a", "subtitle": "#1e293b", "body": "#334155"}
+    return {"title": "#f8fafc", "subtitle": "#e2e8f0", "body": "#cbd5e1"}
+
+
+def _footer_bg(bg_alt: str) -> str:
+    """Dark variant of bg_alt (frontend darkenForFooter: lightness 5–14%)."""
+    import colorsys
+    r, g, b = (int(bg_alt[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    h, l, s_ = colorsys.rgb_to_hls(r, g, b)
+    r, g, b = colorsys.hls_to_rgb(h, max(0.05, min(l - 0.12, 0.14)), s_)
+    return "#" + "".join(f"{round(v * 255):02x}" for v in (r, g, b))
+
+
+_CHOSEN_THEME_RE = re.compile(
+    r'Theme colou?r chosen by the user: "([^"]*)" \(background (#[0-9a-fA-F]{6}), second background '
+    r'(#[0-9a-fA-F]{6}), accent (#[0-9a-fA-F]{6})\)'
+)
+
+
+def _chosen_theme(message: str) -> dict[str, str] | None:
+    """The theme the onboarding wizard sent (picked by the user, or drawn at
+    random for "Let AI choose"). The frontend repaints the page with it after
+    the build, so the service applies the same alternation first."""
+    m = _CHOSEN_THEME_RE.search(message or "")
+    if not m:
+        return None
+    return {"id": "chosen", "label": m.group(1), "section_bg": m.group(2).lower(),
+            "bg_alt": m.group(3).lower(), "accent": m.group(4).lower()}
+
+
+def _ai_palette_note(theme: dict[str, str]) -> str:
+    return (
+        f"\n\n(Colour theme — the user let you choose, and the theme for this page is \"{theme['label']}\": "
+        f"backgrounds alternate {theme['section_bg']} and {theme['bg_alt']} down the page, starting with HERO; "
+        f"accent {theme['accent']} on every section; the footer a dark shade of {theme['bg_alt']}. Use exactly "
+        "these colours. Text is dark on the light background and light on the dark one.)"
+    )
+
+
+def _apply_build_theme(content: list[dict[str, Any]], theme: dict[str, str], page_owned: frozenset[str]) -> None:
+    """Paint the page with a curated theme the way the frontend's
+    applyCuratedThemeToSections() does. Sections over a background image keep
+    no bg and get white text; the user's own Code sections are left alone."""
+    image_text = {"title": "#ffffff", "subtitle": "rgba(255,255,255,0.9)", "body": "rgba(255,255,255,0.8)"}
+    alt = False
+    for section in content:
+        if section.get("is_hidden"):
+            continue
+        stype = normalize_section_type(section.get("type"))
+        if stype == catalog.CODE_SECTION_TYPE and (section.get("instance_key") or "code") in page_owned:
+            continue
+        keys = catalog.SECTION_COLOR_KEYS.get(stype, ("title", "bg", "accent"))
+        colors = dict(section.get("colors") or {})
+        if stype == "FOOTER":
+            bg = _footer_bg(theme["bg_alt"])
+            text = _theme_text(bg)
+        elif section.get("bg_image_url") or (stype == "HERO" and int(section.get("style") or 1) in (1, 2)):
+            # Photo background (hero Backdrop/Cinematic gets one): keep its
+            # alternation slot free and use white text over the dark overlay.
+            colors.pop("bg", None)
+            colors.update({k: v for k, v in image_text.items() if k in keys})
+            if "accent" in keys:
+                colors["accent"] = theme["accent"]
+            section["colors"] = colors
+            continue
+        else:
+            bg = theme["bg_alt"] if alt else theme["section_bg"]
+            alt = not alt
+            text = _theme_text(bg)
+        colors["bg"] = bg
+        if "accent" in keys:
+            colors["accent"] = theme["accent"]
+        for k, v in text.items():
+            if k in keys:
+                colors[k] = v
+        colors.pop("card_bg", None)
+        section["colors"] = {k: v for k, v in colors.items() if k in keys or k == "bg"}
+
+
+def _photo_gallery_format(urls: list[str]) -> str:
+    listed = "\n".join(f"  {i}. {u}" for i, u in enumerate(urls[:_PHOTO_GALLERY_MAX], 1))
+    return (
+        f"a photo gallery of expanding panels built from the user's {min(len(urls), _PHOTO_GALLERY_MAX)} "
+        f"uploaded photos, one per panel, in this order:\n{listed}\n"
+        "Each panel shows its photo filling it (background-image: url(...); background-size: cover; "
+        "background-position: center). The hovered, focused or clicked panel widens to about four times the "
+        "others; the first one starts open. Collapsed panels show only the photo and a small number — no text "
+        "that could be cut off. The open panel may show a one-line caption at the bottom, but only when the "
+        "image analysis or the user says what that photo shows; otherwise no caption. Panels are buttons with "
+        "an aria-label, and arrow keys move between them. On phones: a horizontal scroll-snap row of tall "
+        "cards instead. Use no other image URLs"
+    )
+
+
+def _full_build_note(
+    session_id: str = "",
+    kind: str = "any",
+    has_photos: bool = False,
+    photo_urls: list[str] | None = None,
+) -> str:
+    """The full-build service note with one Code section format: a photo
+    gallery when the user has enough photos, else one for this kind of page
+    drawn from that kind's shuffle bag."""
+    if photo_urls and len(photo_urls) >= _PHOTO_GALLERY_MIN:
+        return _FULL_BUILD_CODE_BLOCKS_NOTE.replace("{format}", _photo_gallery_format(photo_urls))
+    last = _last_code_block_format.get(session_id, (0.0, ""))[1]
+    texts = dict(_formats_for(kind, has_photos))
+    interactive = {key for key, is_interactive, *_rest in _CODE_FORMATS if is_interactive}
+    with _code_block_format_lock:
+        bag = _code_block_format_bags.setdefault((kind, has_photos), [])
+        if not bag:
+            keys = [k for k in texts for _ in range(2 if k in interactive else 1)]
+            bag.extend(random.sample(keys, len(keys)))
+        # The next format in the bag that this session did not just get
+        pick = next((i for i, k in enumerate(bag) if k != last), 0)
+        choice = bag.pop(pick)
+    if session_id:
+        _remember_session_value(_last_code_block_format, session_id, choice)
+    return _FULL_BUILD_CODE_BLOCKS_NOTE.replace("{format}", texts[choice])
+def _code_block_problem(html: Any, known_text: str = "") -> str | None:
+    """Why HTML Bob wrote cannot stay, or None. Interactive parts are welcome
+    when its own script makes them work; controls that do nothing are not."""
+    return dead_controls(html, known_text)
+
+
+_QUALITY_FILLER = (
+    "passionate", "we strive", "one-stop shop", "elevate", "unlock", "seamless", "cutting-edge",
+    "world-class", "your journey", "look no further",
+)
+_QUALITY_PLACEHOLDER_RE = re.compile(
+    r"lorem ipsum|\bsection title\b|\byour (title|headline|tagline|company|brand|business) (here|name)\b"
+    r"|\bplaceholder\b|\bsample text\b|\btext goes here\b|\byour text here\b",
+    re.IGNORECASE,
+)
+# Facts the model must not invent: (label, pattern). A hit only counts when the
+# matched text appears nowhere in what the user wrote or the page state.
+_INVENTED_FACT_RES = (
+    ("an email address", re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")),
+    ("a phone number", re.compile(r"\+?\d[\d ().-]{7,}\d")),
+    ("a street address", re.compile(
+        r"\b(?:street|st\.|road|rd\.|avenue|ave\.|boulevard|blvd|straat|weg|laan)\s*#?\d+\b"
+        r"|\b\d+\s+(?:street|road|avenue)\b|ផ្លូវ\s*\d+",
+        re.IGNORECASE,
+    )),
+    ("opening hours or times", re.compile(
+        r"\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b\d{1,2}:\d{2}\b|\b\d{1,2}\.\d{2}\s?(?:uur|h)\b|\b\d{1,2}\s?uur\b",
+        re.IGNORECASE,
+    )),
+    ("a founding year", re.compile(
+        r"\b(?:since|sinds|founded in|established in|est\.?|opgericht in|baking since)\s+(?:19|20)\d{2}\b",
+        re.IGNORECASE,
+    )),
+    ("a price", re.compile(r"(?:[$€៛]|\bUSD|\bKHR|\briel)\s?\d|\b\d+(?:[.,]\d+)?\s?(?:[$€៛]|USD\b|KHR\b|riels?\b)", re.IGNORECASE)),
+)
+_HTML_URL_RE = re.compile(
+    r"""(?:src|href)\s*=\s*["']?(https?://[^"'\s>]+)|url\(\s*["']?(https?://[^"')\s]+)""", re.IGNORECASE
+)
+_ALLOWED_HTML_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
+_TAG_RE = re.compile(r"<[^>]+>")
+_FIXED_SECTION_LIST_RE = re.compile(r"exactly \d+ sections in this order", re.IGNORECASE)
+
+
+def _blueprint_texts(section: Any) -> list[str]:
+    """Visitor-facing text of a section (titles, copy, items), not URLs/colours."""
+    out: list[str] = []
+    if isinstance(section, dict):
+        for key, value in section.items():
+            if key in ("colors", "text_styles", "type", "style", "instance_key", "section_subtype", "feed_type",
+                       "video_mode", "image_url", "image_url_2", "bg_image_url", "logo_url", "is_hidden"):
+                continue
+            out += _blueprint_texts(value)
+    elif isinstance(section, list):
+        for value in section:
+            out += _blueprint_texts(value)
+    elif isinstance(section, str):
+        out.append(section)
+    return out
+
+
+def _quality_problems(data: dict[str, Any], known_text: str, message: str, theme_set: bool = False) -> list[str]:
+    """Concrete problems with a full page answer, written as instructions for the
+    model. Empty when the page passes."""
+    blueprint = data.get("blueprint")
+    content = blueprint.get("content") if isinstance(blueprint, dict) else None
+    if not isinstance(content, list) or not content:
+        return []
+    problems: list[str] = []
+    known = (known_text or "").lower()
+    # Code sections hold HTML, not section copy: checked below with code blocks.
+    is_code = [isinstance(s, dict) and normalize_section_type(s.get("type")) == catalog.CODE_SECTION_TYPE
+               for s in content]
+    sections = [s for s, code in zip(content, is_code) if isinstance(s, dict) and not code]
+    present = {normalize_section_type(s.get("type")) for s in sections if not s.get("is_hidden")}
+    for must in ("HERO", "FOOTER"):
+        if must not in present:
+            problems.append(f"the page has no {must} — a full page starts with HERO and ends with FOOTER")
+    middle = [s for s in content if isinstance(s, dict)
+              and normalize_section_type(s.get("type")) not in ("HERO", "FOOTER") and not s.get("is_hidden")]
+    # (Neighbouring sections with the same background are not a retry reason:
+    # separate_adjacent_backgrounds() always fixes them, without a second call.)
+    if not _FIXED_SECTION_LIST_RE.search(message or "") and not 4 <= len(middle) <= 7:
+        problems.append(f"the page has {len(middle)} middle sections — use 4 to 7 that fit the brand")
+    if _ai_picks_colours(message) and not theme_set:
+        middle_bgs = [(s.get("colors") or {}).get("bg") for s in middle if isinstance(s.get("colors"), dict)]
+        if middle_bgs and all(is_neutral(bg) or not bg for bg in middle_bgs):
+            problems.append(
+                "every middle section is white or grey — the user let you choose the colours: pick a palette for "
+                "this brand and alternate its section_bg and bg_alt tints of the brand hue"
+            )
+    for s in sections:
+        stype = normalize_section_type(s.get("type"))
+        title = str(s.get("title") or "").strip()
+        if stype == "HERO" and (not title or title.lower().startswith(("welcome", "welkom"))):
+            problems.append("the HERO title is empty or starts with \"Welcome\" — write a specific 2–8 word headline")
+        elif stype not in ("FOOTER",) and not title:
+            problems.append(f"the {stype} section has no title")
+        if stype == "FAQ" and len([i for i in s.get("faq_items") or [] if isinstance(i, dict)]) < 4:
+            problems.append("the FAQ has fewer than 4 questions — write 4 to 6 real visitor questions")
+        if stype == "TESTIMONIALS" and "testimonials:" not in known:
+            roles = [str(i.get("role") or "") for i in s.get("testimonial_items") or [] if isinstance(i, dict)]
+            if any(r != "Sample review" for r in roles):
+                problems.append("the user gave no reviews, so every testimonial needs role \"Sample review\"")
+
+    texts = [t for s in sections for t in _blueprint_texts(s)]
+    code_html = [
+        ("the Custom Code section", s) for s, code in zip(content, is_code) if code and s.get("html")
+    ] + [
+        (f"the code block under {b.get('section') or 'the page'}", b)
+        for b in data.get("code_blocks") or [] if isinstance(b, dict) and b.get("action") == "add"
+    ]
+    for label, block in code_html:
+        html = block.get("html")
+        if not isinstance(html, str):
+            continue
+        texts.append(_TAG_RE.sub(" ", html))
+        reason = _code_block_problem(html, known_text)
+        if reason:
+            problems.append(
+                f"{label} has {reason} — make every clickable part work with the inline script, or remove it"
+            )
+        for style_problem in code_style_problems(html, known_text):
+            problems.append(f"{label} has {style_problem}")
+        for url in (a or b for a, b in _HTML_URL_RE.findall(html)):
+            host = (urlparse(url).hostname or "").lower()
+            if url.lower() not in known and not host.endswith(_ALLOWED_HTML_HOSTS):
+                problems.append(f"a code block links to {url}, which the user never gave — remove it")
+    joined = "\n".join(texts)
+    low = joined.lower()
+    for phrase in _QUALITY_FILLER:
+        if phrase in low:
+            problems.append(f"the copy uses the filler phrase \"{phrase}\" — rewrite it concretely")
+    if _QUALITY_PLACEHOLDER_RE.search(joined):
+        problems.append("the copy still has placeholder text — replace it with real copy")
+    for label, pattern in _INVENTED_FACT_RES:
+        invented = sorted({m.group(0).strip() for m in pattern.finditer(joined) if m.group(0).strip().lower() not in known})
+        if invented:
+            problems.append(
+                f"the copy invents {label} the user never gave ({', '.join(invented[:3])}) — remove it or "
+                "write the sentence without it"
+            )
+    return list(dict.fromkeys(problems))
+
+
+def _quality_retry_note(problems: list[str]) -> str:
+    return (
+        "\n\n(Quality check — your page is not finished yet. Fix exactly these problems and send the whole "
+        "corrected answer again, keeping everything else:\n- " + "\n- ".join(problems) + ")"
+    )
+
+
+def _parse_model_json(raw: str) -> dict[str, Any] | None:
+    """A JSON object from model text (fences/trailing prose tolerated), or None."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        if text.endswith("```"):
+            text = text[: text.rfind("```")]
+    brace = text.find("{")
+    if brace == -1:
+        return None
+    try:
+        parsed, _end = json.JSONDecoder().raw_decode(text, brace)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _user_uploaded_banner(message: str) -> bool:
+    return any(_URL_RE.search(field.group(1)) for field in _BANNER_FIELD_RE.finditer(message))
+
+
+def _auto_image_slots(message: str) -> tuple[str, ...]:
+    """Section types ("HERO", "ABOUT") whose photo is generated this turn; () for none."""
     message = message or ""
     if not (_AUTO_IMAGES_ENABLED and _ONBOARDING_FINAL_RE.search(message)):
-        return False
+        return ()
+    slots: list[str] = []
+    if _user_uploaded_banner(message):
+        logger.info("First-build HERO image skipped: the user uploaded a banner image")
+    else:
+        slots.append("HERO")
     if _user_uploaded_photos(message):
-        logger.info("First-build images skipped: the user uploaded photos during onboarding")
-        return False
-    return True
+        logger.info("First-build ABOUT image skipped: the user uploaded photos during onboarding")
+    else:
+        slots.append("ABOUT")
+    return tuple(slots)
 
 
 def _fallback_image_prompt(section: dict[str, Any], slot_type: str) -> str:
@@ -531,8 +1420,9 @@ async def _auto_fill_key_images(
     image_prompts: Any,
     deadline: float,
     prefetched: dict[str, str] | None = None,
+    slots: tuple[str, ...] = ("HERO", "ABOUT"),
 ) -> list[GeneratedImage]:
-    """Generate the empty hero/about photos in parallel and place them in the
+    """Generate the empty photos of `slots` (hero/about) in parallel and place them in the
     blueprint. A section is switched to an image layout ONLY when its image
     arrived, so a failed generation leaves the AI's text-led layout intact."""
     remaining = deadline - time.monotonic()
@@ -545,6 +1435,8 @@ async def _auto_fill_key_images(
     for section in raw_blueprint.get("content") or []:
         stype = normalize_section_type(section.get("type"))
         for slot_type, field, image_style in _AUTO_IMAGE_SLOTS:
+            if slot_type not in slots:
+                continue
             if stype != slot_type or slot_type in claimed or section.get("is_hidden"):
                 continue
             claimed.add(slot_type)  # first visible instance only
@@ -593,14 +1485,14 @@ async def _auto_fill_key_images(
     return generated
 
 
-async def _prefetch_auto_images(message: str, deadline: float) -> dict[str, str]:
-    """Generate first-build images alongside the slower blueprint model call."""
+async def _prefetch_auto_images(message: str, deadline: float, slots: tuple[str, ...]) -> dict[str, str]:
+    """Generate the first-build images of `slots` alongside the slower blueprint model call."""
     context = " ".join((message or "").split())[:1400]
     prompts = {
         "HERO": (
             f"Clean wide editorial hero background photograph, image-only, for the business "
             f"described here: {context}. Show only the real-world products, materials, setting, "
-            "and atmosphere. Leave calm visual space for website copy to be overlaid separately. "
+            "and atmosphere. Leave a calm, empty area (plain wall, sky or tabletop) on one side. "
             "Do not create a website mockup, advertisement, poster, banner design, or promotional "
             "graphic."
         ),
@@ -611,6 +1503,7 @@ async def _prefetch_auto_images(message: str, deadline: float) -> dict[str, str]
             "promotional graphic, or text-bearing composition."
         ),
     }
+    prompts = {slot: prompt for slot, prompt in prompts.items() if slot in slots}
     results = await asyncio.gather(
         *(
             asyncio.to_thread(
@@ -663,7 +1556,7 @@ def _normalize_section_styles(layout_sections: list[dict[str, Any]]) -> None:
         section_type = normalize_section_type(section.get("type"))
         if not section_type:
             continue
-        style, changed = normalize_style(section_type, section.get("style"))
+        style, changed = normalize_style(section_type, section.get("style"), section.get("section_subtype"))
         if changed:
             logger.warning(
                 "Adjusted invalid style for section=%s from=%s to=%s based on backend canonical map",
@@ -674,39 +1567,6 @@ def _normalize_section_styles(layout_sections: list[dict[str, Any]]) -> None:
         section["type"] = section_type
         section["style"] = style
         section["is_hidden"] = bool(section.get("is_hidden", False))
-
-
-def _instance_key_for(section: dict[str, Any]) -> str:
-    """Return instance_key if set, else fall back to section type string."""
-    return section.get("instance_key") or normalize_section_type(section.get("type"))
-
-
-def _extract_style_reasons(raw_blueprint: Any, raw_patches: Any) -> dict[str, str]:
-    reasons: dict[str, str] = {}
-    if isinstance(raw_blueprint, dict):
-        for section in raw_blueprint.get("content", []) or []:
-            if not isinstance(section, dict):
-                continue
-            reason = section.get("style_reason")
-            key = _instance_key_for(section)
-            if key and isinstance(reason, str) and reason.strip():
-                reasons[key] = reason.strip()
-    if isinstance(raw_patches, list):
-        for patch in raw_patches:
-            if not isinstance(patch, dict):
-                continue
-            section_type = normalize_section_type(patch.get("type"))
-            key = patch.get("instance_key") or section_type
-            top_reason = patch.get("style_reason")
-            if key and isinstance(top_reason, str) and top_reason.strip():
-                reasons[key] = top_reason.strip()
-            updates = patch.get("updates")
-            if not isinstance(updates, dict):
-                continue
-            reason = updates.get("style_reason")
-            if key and isinstance(reason, str) and reason.strip():
-                reasons[key] = reason.strip()
-    return reasons
 
 
 def _apply_patches_to_layout(
@@ -799,484 +1659,209 @@ def _validate_ai_uploads_against_layout(raw_uploads: Any, final_layout: list[dic
             logger.warning("Rejected non-rendered uploads_needed entry from AI: %s", raw)
 
 
-def _styles_selected_from_layout(
-    final_layout: list[dict[str, Any]] | None,
-    style_reasons: dict[str, str],
-) -> list[dict[str, Any]] | None:
-    if final_layout is None:
-        return None
-    styles_selected: list[dict[str, Any]] = []
-    for section in final_layout:
-        section_type = normalize_section_type(section.get("type"))
-        if not section_type:
+def _validate_styles_selected(raw: Any) -> list[StyleSelection]:
+    """The model's own styles_selected, each style checked against the catalog.
+    Entries for unknown sections or with a broken shape are dropped; an invalid
+    style becomes the section's first catalog style."""
+    if not isinstance(raw, list):
+        if raw is not None:
+            logger.warning("Ignored styles_selected that is not a list: %.120r", raw)
+        return []
+    selections: list[StyleSelection] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            logger.warning("Dropped non-object styles_selected entry: %.120r", entry)
             continue
-        instance_key = section.get("instance_key") or None
-        reason_key = instance_key or section_type
-        entry: dict[str, Any] = {
-            "section": section_type.lower(),
-            "style": int(section.get("style", 1)),
-            "is_hidden": bool(section.get("is_hidden", False)),
-        }
-        if instance_key:
-            entry["instance_key"] = instance_key
-        reason = style_reasons.get(reason_key)
-        if reason:
-            entry["style_reason"] = reason
-        styles_selected.append(entry)
-    return styles_selected
+        section_type = normalize_section_type(entry.get("section"))
+        if section_type not in catalog.GENERATABLE_SECTIONS:
+            logger.warning("Dropped styles_selected entry for unsupported section %r", entry.get("section"))
+            continue
+        style, changed = normalize_style(section_type, entry.get("style"), entry.get("section_subtype"))
+        if changed:
+            logger.warning(
+                "Adjusted invalid styles_selected style for section=%s from=%s to=%s",
+                section_type, entry.get("style"), style,
+            )
+        try:
+            selections.append(StyleSelection(**{**entry, "style": style}))
+        except Exception as e:
+            logger.warning("Dropped malformed styles_selected entry %.120r: %s", entry, e)
+    return selections
+
+
+def _code_block_adds_to_sections(
+    raw_code_blocks: Any,
+    raw_blueprint: Any,
+    raw_patches: Any,
+) -> tuple[Any, Any]:
+    """Each code_blocks "add" becomes a Custom Code section: in a full page,
+    right after the section it was meant for; otherwise an add_block patch.
+    Returns the remaining code_blocks and the patches."""
+    if not isinstance(raw_code_blocks, list):
+        return raw_code_blocks, raw_patches
+    adds = [b for b in raw_code_blocks if isinstance(b, dict) and b.get("action") == "add"]
+    if not adds:
+        return raw_code_blocks, raw_patches
+    rest = [b for b in raw_code_blocks if not any(b is a for a in adds)]
+    content = raw_blueprint.get("content") if isinstance(raw_blueprint, dict) else None
+    for block in adds:
+        section = {"type": catalog.CODE_SECTION_TYPE, "html": block.get("html")}
+        if isinstance(content, list):
+            target_type = normalize_section_type(block.get("section"))
+            target_key = block.get("instance_key")
+            index = next(
+                (i + 1 for i, s in enumerate(content)
+                 if isinstance(s, dict) and target_type and normalize_section_type(s.get("type")) == target_type
+                 and (not target_key or s.get("instance_key") == target_key)),
+                len(content),
+            )
+            content.insert(index, section)
+        else:
+            raw_patches = [*(raw_patches if isinstance(raw_patches, list) else []),
+                           {"action": "add_block", "type": catalog.CODE_SECTION_TYPE,
+                            "updates": {"html": block.get("html")}}]
+    logger.info("Turned %d code_blocks add(s) into Custom Code section(s)", len(adds))
+    return rest or None, raw_patches
+
+
+def _pass_code_blocks(raw: Any, page_context: str | None) -> list[dict[str, Any]] | None:
+    """The model's code_blocks, passed through unchanged — the frontend applies
+    and caps them (catalog `code_blocks` spec). Only non-object entries are
+    dropped (they cannot be serialized); spec problems are logged, not fixed."""
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        logger.warning("Ignored code_blocks that is not a list: %.120r", raw)
+        return None
+    spec = catalog.CODE_BLOCKS_SPEC
+    actions = spec.get("actions") or {}
+    blocks: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            logger.warning("Dropped non-object code_blocks entry: %.120r", entry)
+            continue
+        action = entry.get("action")
+        rules = actions.get(action)
+        if rules is None:
+            logger.warning("code_blocks entry with unknown action %r", action)
+        else:
+            missing = [f for f in rules.get("required", ()) if not entry.get(f)]
+            if missing:
+                logger.warning("code_blocks %s entry is missing %s", action, missing)
+        html = entry.get("html")
+        if isinstance(html, str) and len(html) > spec.get("html_max_chars", 20000):
+            logger.warning("code_blocks html is %d chars (frontend caps it)", len(html))
+        block_id = entry.get("id")
+        if action in ("update", "delete") and block_id and block_id not in (page_context or ""):
+            logger.warning("code_blocks %s uses id %r that is not in the page state", action, block_id)
+        blocks.append(entry)
+    return blocks or None
 
 
 # ---------------------------------------------------------------------------
-# System prompt — teaches the AI the complete V2 section registry and schema.
-# All catalog knowledge (types, styles, fonts, palettes, colors) is generated
-# from services/section_catalog.py so the prompt can never drift from the
-# validators or the frontend.
+# System prompt — the frontend's tuned prompt and section registry, loaded
+# from services/builder_ai/builder-ai-prompt.md (an exact copy of fe-serey-web
+# docs/ai/builder-ai-prompt.md, generated by scripts/export-ai-builder-prompt.js).
+# Change it on the frontend side and copy it over — never edit it here.
+# _SERVICE_ADDENDUM covers what only this service knows about: the blocks it
+# adds to the user message and the onboarding intake.
 # ---------------------------------------------------------------------------
+
+_SERVICE_ADDENDUM = """---
+
+## SERVICE ADDENDUM
+The AI service adds some blocks to the user message. These rules explain them; they do not change the rules above.
+
+### Blocks the service may add
+- `COMMUNITY ID:` — set `blueprint.community_id` to that integer.
+- `REPLY LANGUAGE:` — write `reply` in that language, even if the user types in another one. It applies to
+  `reply` only; page copy still follows the language the user writes their content in.
+- `PREVIOUS PAGE STATE` — the page before your last change. When the user wants one specific old value back
+  ("put the old title back", "the previous colours"), read it from there and restore exactly that value with
+  `update_block` patches; for a colour theme, patch every section listed there. Never guess an old value. If
+  this block is absent, say you can't see the earlier version and suggest typing "undo".
+- `WHAT THE PAGE'S IMAGES ACTUALLY SHOW` — a real analysis of the uploaded images: trust it, and match each
+  "Image N" to its URL. Without this block you cannot see image content — never describe or guess what a
+  photo shows; ask the user to describe it instead.
+- `CONVERSATION HISTORY` — earlier turns of this session.
+- "(Community facts …)" at the end of the user message — what the community really has (online shop, podcast
+  episodes) and whether the user uploaded photos. Follow it on every full page build, even over a fixed section
+  list: product section only with a shop (and always with one), PODCAST when there are episodes, no photo gallery
+  without photos.
+
+### Custom Code sections (type 11, key `code`) — instead of code blocks
+This overrides the "Code / HTML blocks" part above and the rule against sending type 11. When you write HTML
+for the page, put it in a Custom Code section: a full-width section in the page flow, rendered in a sandboxed
+iframe (extra copies have keys like `code__2`).
+- Never add code blocks: no `code_blocks` "add". You may still update or delete a code block already listed in
+  "CODE / HTML BLOCKS ON THE PAGE".
+- Full page: put `{ "type": 11, "html": "...", "colors": { "bg": "<hex>" } }` in `content`, right after the
+  section it relates to. Edit turn: an `add_block` patch with `"type": 11` and `updates` `{ "html": "...",
+  "colors": { "bg": "<hex>" } }`.
+- Content: real content about THIS page — built from the brand, products, services and description in the
+  page state and the user's message (what it is, how it works, what makes it different). Never generic filler,
+  never invented facts (no prices, times, dates, numbers, reviews or names the user did not give).
+- Colours: `colors.bg` is a background the page already uses (a section bg or its tint from the theme), not a
+  new colour, and it differs from the sections next to it. Keep the html background transparent so the
+  section bg shows. The service adds the colours of the background the section lands on as CSS variables —
+  use them for every colour in your CSS: `var(--page-text)`, `var(--page-muted)`, `var(--page-accent)`,
+  `var(--page-card)` (cards and panels) and `var(--page-line)` (borders), never fixed text colours, so the
+  section reads on a light or a dark background. Use the page's fonts.
+- Interactive and animated is welcome — a wheel or dial that shows details per segment, tabs, an accordion,
+  flip cards, a stepper — when it works: every clickable part must visibly change something inside the section
+  through an inline `<script>` (`addEventListener`). Add a subtle entrance animation and smooth hover/active
+  transitions, turned off under `@media (prefers-reduced-motion: reduce)`.
+- Nothing that leads nowhere: no links (unless to a URL the user gave), forms, inputs, or buttons, pills, tabs
+  or filter bars without a script that makes them work, and no external scripts. Such a section is removed.
+- No AI look: no emoji (not even as icons — draw icons with CSS or inline SVG in the accent colour), no
+  gradients (flat palette colours only, also for text), no pill badges, and no mention of AI. A small
+  uppercase label above a heading is fine.
+- Height: the section grows to fit its content, so let the content set the height. Never use `vh` heights,
+  a fixed height on the outer wrapper, or `position: fixed` — they cut the bottom off. Absolute
+  positioning only inside an element with its own fixed size (for example the segments of a 360px wheel).
+- Balanced spacing: one outer wrapper, centred, `max-width` about 1100px, with the same padding top and bottom
+  (about 64px, 40px on phones) and 24px at the sides. Use one spacing scale (8, 16, 24, 32, 48px): equal gaps
+  between items, the same inner padding in every card, cards in a row the same height, and text aligned the
+  same way throughout. No empty space at the top or bottom.
+- One self-contained snippet: CSS in an inline `<style>`, no `<html>`/`<head>`/`<body>` tags, no markdown
+  fences, responsive (`max-width: 100%`, items stack on phones), under 50,000 characters. Only uploaded image
+  URLs; embed only URLs the user gave you.
+- A type 11 section already on the page may be the user's own code. Change its html (`update_block` with
+  `instance_key` and `html`) or delete it only when the user asks for that section. On a full page build, the
+  service keeps the page's existing type 11 sections where they were; to move one, add
+  `{ "type": 11, "instance_key": "<its key>" }` (no html) at the new place. A type 11 section without `html`
+  is legacy data from an older section; leave it alone.
+
+### Guided onboarding intake
+When the message starts with "You are building a landing page in a guided multi-step flow." and contains
+"Current phase: final", it is the last step of the onboarding wizard, with all of the user's answers:
+- Send a full blueprint, never patches. If it has a "Task: ... exactly N sections in this order: ..." line,
+  use exactly those sections in that order — nothing added, nothing removed.
+- "Brand name:" → the basis of the hero title (the copy rules above still apply).
+- "Platform details:" → the source for ABOUT and every description. Use the user's facts; do not invent another story.
+- "Product N: <name> — <description> [image: <url>]" lines: when at least one has an [image: ...], the page's
+  GALLERY is a PHOTO gallery — always send `section_subtype: "gallery"` on it. If the community facts say there is
+  an online shop, keep a product section too (photo gallery `instance_key: "gallery"`, product section
+  `"gallery__2"`). Make exactly one `images[]` item per Product line, in the same order: `image_url`
+  = that line's exact [image: ...] URL ("" when it has none), `name` = its title, `description` = its
+  description (write a short one if it is empty). Never add, drop or reorder items, and add no second photo
+  gallery. Without any [image: ...], there is no photo gallery (see the community facts).
+- "Contact information:" → FOOTER `email` / `phone` / `location` / `social_links`. When it is missing or empty
+  (the wizard may not ask for it), leave those fields out — never invent them — and say in `reply` that the
+  user can add their contact details. "Logo: <url>" → FOOTER `logo_url` only.
+- "Banner images:" URLs → HERO `image_url`. "Additional images:" URLs → image fields the chosen layouts show.
+- "Additional section content provided by user:" lines (TESTIMONIALS:, FAQ:, TEAM:, VISION:, SUBSCRIPTION:,
+  RANKING:) → that section's items or copy, used as written (grammar polish only). Testimonials the user gave
+  are real: do not mark them "Sample review".
+- Also return a top-level `"image_prompts": {"hero": "...", "about": "..."}`: one or two English sentences
+  each, describing a photo of THIS business (its place, craft, products or atmosphere — hands, objects and
+  places, never faces, text, signs, labels or logos — describe a scene with no writing in it). Send
+  `image_prompts` only on this final intake.
+"""
+
 
 def _build_system_prompt() -> str:
-    animation_options = " | ".join(f'"{a}"' for a in catalog.ANIMATION_STYLES)
-    image_shape_options = " | ".join(catalog.IMAGE_SHAPES)
-    return f"""You are an expert AI page builder for Serey community landing pages (V2).
-Your job is to help users design their landing page through natural conversation.
-
-== SECTION TYPE IDs ==
-{catalog.build_type_id_block()}
-
-== SECTION REGISTRY ==
-Each page is a JSON array of section objects. Available section types (with their content fields and allowed style numbers):
-
-{catalog.build_section_registry_block()}
-
-FOOTER extraction rules:
-  If the user's message contains a phone number, put it in the "phone" field.
-  If it contains an email address, put it in the "email" field.
-  If it contains Facebook/Instagram/Telegram/social links, add them to "social_links" as [{{"type":"facebook","handle":"pagename"}}].
-  Never leave phone/email blank if the user provided them.
-  contact_heading/social_heading are optional column headings; privacy_url/terms_url are optional legal links.
-
-== SECTION OBJECT SHAPE ==
-Every section must include:
-  type              — integer type ID (string "TEXTBLOCK" for text blocks) (REQUIRED)
-  style             — integer from the section's allowed style list (REQUIRED)
-  is_hidden         — boolean, default false (REQUIRED)
-  instance_key      — string. REQUIRED for all sections. The FIRST instance of a type uses the BARE base name (e.g. "gallery", "team", "faq" — NEVER "gallery_1"). Singletons: "hero", "footer".
-  colors            — object of hex strings; allowed keys per section listed below
-  bg_image_url      — always set to "" UNLESS page_context shows an ALREADY UPLOADED bg_image_url — then copy that exact URL
-  bg_image_opacity  — float 0.0–1.0, default 0.5
-Optional per-section fields:
-  section_theme     — "" (default) or "editorial" (adds an editorial magazine treatment to the section)
-  section_height    — custom height in px; omit or 0 for auto
-  image_shape       — shape of the section's image: {image_shape_options} ("" = default square)
-  text_styles       — typography overrides, see TYPOGRAPHY below
-NEVER emit or modify: floating_widgets, mobile_overrides, tablet_overrides, text_offsets.
-These are editor-managed features that exist on the page — leave them alone; the frontend preserves them.
-
-== COLOR KEYS PER SECTION ==
-{catalog.build_color_keys_block()}
-  (HERO also accepts optional btn / btn_text keys for its call-to-action button.)
-
-== COLOR DEFAULTS ==
-  Light section defaults: title="#0f172a"  accent="#2b45a8"  body="#334155"  bg="#ffffff"
-  Dark section defaults:  title="#eef4ff"  accent="#60a5fa"  body="#cbd5e1"  bg="#0f172a"
-
-CURATED PALETTES — pick ONE that best fits the platform; use the EXACT hex values, and the same accent across every section:
-{catalog.build_palettes_block()}
-  BACKGROUNDS: hero uses hero_bg; middle sections alternate section_bg / bg_alt (always light, luminance > 0.7);
-  footer bg is always dark (#0f172a or #111827 — same dark tone as hero for a bookend effect).
-
-CRITICAL — TEXT CONTRAST RULE:
-  - If a section bg is DARK (hex luminance < 0.3, e.g. #0f2044, #052e16, #1c1917, #1e1b4b):
-    → ALWAYS set title="#eef4ff" or "#f0f9ff", body="#cbd5e1", subtitle="#e2e8f0"
-    → NEVER use dark colors like #0f3460, #0f172a, #333, #000 for text on dark backgrounds
-  - If a section bg is LIGHT (hex luminance >= 0.3, e.g. #ffffff, #f8fafc, #f0fdf4):
-    → ALWAYS set title="#0f172a", body="#334155"
-    → NEVER use light colors like #f0f4ff, #eef4ff for text on light backgrounds
-  - Apply the correct palette-matching text colors — do not use default fallbacks when you have picked a palette
-  - EXCEPTION: if the user explicitly requests a specific color, use that exact color and adjust the bg for readability.
-
-== FONTS ==
-Set the top-level blueprint "font" field to ONE font from this exact list (or "" for the system default):
-{catalog.build_fonts_block()}
-ALWAYS pair fonts on every full page: set blueprint "font" to the pairing's BODY font, and set the pairing's TITLE font on the hero via text_styles (e.g. {{"title_font": "Playfair Display"}}) — the frontend propagates hero fonts to all other sections automatically. A page with one font everywhere looks templated; a title/body pairing looks designed.
-Curated pairings (pick the one matching the brand vibe):
-{design.build_font_pairings_block()}
-Script fonts (Dancing Script, Caveat, Great Vibes, Sacramento, Satisfy, Pacifico) are accent-only — never use them as the body font. Khmer-language sites must use Kantumruy Pro, Battambang, Hanuman, Siemreap, or the Noto Khmer fonts.
-NEVER invent a font name that is not in the list.
-Do NOT set text_styles *_size values on a full page build — the frontend has tuned responsive sizes; only set a size when the user explicitly asks for bigger/smaller text.
-
-== TYPOGRAPHY (text_styles) ==
-Each section accepts a "text_styles" object. Keys are {{slot}}{{suffix}} where slot is one of title, subtitle, description and suffix is one of _bold (bool), _italic (bool), _font (font from the list), _size (px int), _color (hex), _align ("left"|"center"|"right").
-Extra slots: TESTIMONIALS supports testi_quote_*, testi_name_*, testi_role_*; GALLERY product cards support gallery_item_name_*, gallery_item_desc_*.
-Use text_styles sparingly — only when the user asks for typography changes or a distinctive editorial look. Colors normally belong in "colors", not text_styles.
-
-== STYLE DESCRIPTIONS ==
-
-{catalog.build_style_descriptions_block()}
-
-BACKGROUND IMAGES:
-  Any section on ANY style can sit over a full-width background image — set bg_image_url + bg_image_opacity, there is no separate
-  "background image" style number. Only do this when the user asks for a background-image look OR page_context shows an
-  already-uploaded bg_image_url for that section; then pick a dark overlay-friendly palette with light text for that section.
-
-== LAYOUT STYLE PREFERENCE WEIGHTS ==
-When you CHOOSE or randomize a section's layout style, prefer styles by weight:
-  High   — default/first choice, use most often.
-  Medium — acceptable alternative, use occasionally for variety.
-  Low    — only when the user explicitly asks for it, or as a last resort.
-These weights break ties between styles that would both work; an explicit user request always wins, and a design
-recipe's style for a section wins over the weights (the recipes are already built from High/Medium choices).
-
-{catalog.build_style_weights_block()}
-
-== FRONTEND STARTER TEMPLATES ==
-The frontend offers 4 starter templates. Their exact structures:
-{catalog.build_templates_block()}
-
-STRUCTURE PRECEDENCE — never violate this order:
-  1. If the user's message specifies an exact section list/order ("exactly N sections in this order: ..."),
-     follow THAT structure precisely — same sections, same order, nothing added or removed.
-  2. If page_context shows an existing page built from a template, keep its section order and only
-     change what the user asked for.
-  3. Only when neither applies do you choose the structure yourself (via SECTION RECOMMENDATIONS).
-Design recipes below control the LOOK (palette, fonts, styles, animation) — they never add, remove,
-or reorder sections when a structure is already given. When the template flow asks you to pick a
-different visual identity than the template default, apply a recipe's look onto the template's structure.
-
-EXTRA SECTIONS ON A TEMPLATE: the onboarding flow may append picked sections (TEAM, FAQ, VISION,
-SUBSCRIPTION, VIDEO, BLOG...) to a template's base structure, inserted before FOOTER. Identify which
-starter template the given order extends by matching its leading sections, then style each added
-section to fit that template's vibe (your chosen design recipe still wins if one applies):
-{catalog.build_template_extras_block()}
-
-== GUIDED ONBOARDING INTAKE ==
-When the user message starts with "You are building a landing page in a guided multi-step flow." and
-contains "Current phase: final", it is the FINAL intake of the onboarding wizard — all the user's
-answers in one message. Respond with a FULL blueprint (never patches), following the
-"Task: ... exactly N sections in this order: ..." line per STRUCTURE PRECEDENCE rule 1.
-Map the labeled intake fields to the blueprint like this:
-  - "Brand name:" → basis for the hero title (copywriting rules still apply — never "Welcome to X"
-    or the bare name; write an evocative title that features or evokes the brand).
-  - "Platform details:" → source material for the about section and all descriptions. Use the user's
-    actual facts and tone; do not invent a different story.
-  - "Products / Services / Special features:" with "Product N: <name> — <description> [image: <url>]"
-    lines → the GALLERY images[] items: use EVERY listed product, keep the user's exact names and
-    descriptions (polish grammar only), and copy each [image: ...] URL into that item's image_url.
-    Never invent extra products and never drop a listed one.
-  - "Contact information:" → footer contact fields. "Logo: <url>" → footer logo_url.
-  - "Banner images:" URLs → hero image_url (or bg_image_url for a background-image look).
-  - "Additional images:" URLs → distribute across image slots the chosen styles actually render
-    (about, gallery, team...) — use every provided image somewhere sensible if possible.
-  - "Additional section content provided by user:" labeled lines map to their sections:
-    TESTIMONIALS: → testimonial_items[] (parse names, roles, quotes from the text),
-    FAQ: → faq_items[] ({{question, answer}}), TEAM: → members[] (names + roles),
-    VISION: → the vision section's copy, SUBSCRIPTION: → the type-13 section's copy,
-    RANKING: → that section. The user's real content beats anything you would write —
-    use it verbatim (grammar polish only). Sections in the order list WITHOUT a labeled block get
-    AI-written content per the copywriting rules.
-  - IMAGE PROMPTS (final intake only): also return a top-level "image_prompts" object:
-    {{"hero": "...", "about": "..."}} — one or two English sentences each describing a photo that fits
-    THIS business (its real place, craft, products or atmosphere) and the page's palette mood. If the
-    user uploaded no images, these become the hero and about photos automatically. Describe scenes
-    with hands, objects and places — never faces, text, signs or logos.
-The intake asks for a visual identity DIFFERENT from the template default: keep the given structure
-exactly, then apply ONE design recipe end-to-end for the look (palette, font pairing, styles, animation).
-
-== DESIGN RECIPES — YOUR PRIMARY DESIGN TOOL ==
-For every full page build, pick the ONE recipe that best matches the platform and follow it end-to-end
-(palette + font pairing + animation + section styles + notes). A recipe followed completely looks
-professionally designed; mixing pieces from different recipes looks assembled. You may deviate from a
-recipe only when the user explicitly asks for something different, or a section it doesn't cover is
-needed (then choose a style consistent with the recipe's mood).
-A recipe's "gallery" style applies ONLY to photo or project galleries. A GALLERY with
-section_subtype="product" ignores it and always uses style 1 (rule 11).
-
-{design.build_design_recipes_block()}
-
-== VISUAL RHYTHM RULES ==
-These separate a 10x page from a template — apply them to every full build:
-  1. BACKGROUND ALTERNATION: never give two adjacent middle sections the same bg. Alternate the
-     palette's section_bg and bg_alt so the page has visible bands of rhythm.
-  2. BOOKENDS: hero and footer share the same dark tone (or the palette's hero_bg); everything
-     between stays light. The page should feel framed.
-  3. DENSITY CONTRAST: after a dense section (grid gallery, team grid, FAQ) place a spacious one
-     (text-only about, big quote testimonial, subscription panel). Never stack two dense grids.
-  4. ONE ACCENT MOMENT: exactly one section mid-page may use the accent color as a large fill
-     (about style 1 panel or subscription style 3 split panel) — this is the page's
-     call-to-action moment. More than one large accent fill cheapens it.
-  5. IMAGE SHAPES: pick ONE image_shape and use it consistently — 'arch' for artisan/organic,
-     'circle' for people/community, 'rounded' for tech/premium, 'blob' for playful, square/default
-     for corporate/editorial. Never mix multiple decorative shapes on one page.
-  6. PEOPLE SECTIONS: team and testimonials always use 'circle' images when the recipe uses shapes.
-  7. subtitle color: slightly muted vs title (use the palette accent or a mid-tone) — title, subtitle
-     and body should be three distinguishable weights of the same mood, not three random colors.
-
-== COPYWRITING RULES ==
-Text quality is half the design. For every section you write:
-  - HERO title: 2-5 words, evocative and specific. BANNED: "Welcome to ...", "Home of ...",
-    the brand name alone, or any generic greeting. Good: "Coffee, Roasted Honestly" not "Welcome to Brew Haven".
-  - HERO subtitle: one concrete value promise, 6-14 words, mentions what the visitor actually gets.
-  - HERO description: keep it SHORT — one sentence, max ~20 words, or leave "" entirely. The subtitle
-    already carries the promise, so the hero must NOT also have a long paragraph. Never start it with
-    "Welcome to ...". Put the fuller story in the ABOUT section, not the hero.
-  - Descriptions (non-hero): 1-3 sentences, specific to THIS brand (use details from the user's message
-    and page context). Write like a human copywriter: concrete nouns, active voice, sensory where fitting.
-  - BANNED WORDS everywhere: "elevate", "unleash", "seamless", "cutting-edge", "world-class",
-    "passionate about", "look no further", "unlock", "empower". These scream AI-generated.
-  - GALLERY product items: real product names (not "Product 1"), each description names a concrete
-    benefit or detail.
-  - FAQ: 4-6 questions a real customer would actually ask about THIS business (price, hours,
-    shipping, how to join...), answered specifically.
-  - TESTIMONIALS: max 4. Realistic full names fitting the market (Khmer names for Cambodia-focused
-    sites), specific praise mentioning a real detail, varied sentence length. Never "John D." style.
-  - SUBSCRIPTION: title states the payoff of subscribing ("Get the Sunday roast list"), never just "Subscribe".
-  - Language: write ALL page copy in the language the user wrote in (Khmer in → Khmer page copy,
-    with a Khmer-capable font from the list).
-
-HERO STYLE VARIETY — CRITICAL:
-  All five hero styles carry equal weight — do NOT default to the same one on every page. Match the platform:
-    Hero 1 (Backdrop)     — e-commerce, products, SaaS, professional services, shops, photography, events
-    Hero 4 (Magazine)     — blogs, media, gaming, community, tech
-    Hero 5 (Mag Cover)    — editorial, portfolio, creative agencies
-    Hero 3 (Centered)     — education, NGO, charity, wellness, courses (no hero image)
-    Hero 6 (Card Overlay) — premium/dark brands, luxury, nightlife
-  Mix hero styles across generations — never repeat the same style if another one fits equally well.
-
-== SECTION RECOMMENDATIONS BY SITE TYPE ==
-  Online Shop:       HERO, ABOUT, GALLERY, TESTIMONIALS, FAQ, FOOTER
-  Restaurant/Food:   HERO, GALLERY, ABOUT, TESTIMONIALS, FOOTER
-  Community/Blog:    HERO, ABOUT, BLOG, RANKING, SUBSCRIPTION, FOOTER
-  Creator/Newsletter:HERO, ABOUT, BLOG, SUBSCRIPTION, FOOTER
-  NGO/Charity:       HERO, ABOUT, VISION, TEAM, TESTIMONIALS, FOOTER
-  Tech/SaaS:         HERO, ABOUT, GALLERY, VISION, FAQ, TESTIMONIALS, FOOTER
-  Education:         HERO, ABOUT, BLOG, TEAM, FAQ, FOOTER
-  Photography:       HERO, GALLERY, ABOUT, FOOTER
-  Professional Svc:  HERO, ABOUT, TEAM, FAQ, TESTIMONIALS, FOOTER
-
-== RESPONSE FORMAT ==
-You MUST always return ONLY valid JSON matching this exact envelope:
-{{
-  "reply": "friendly conversational message to the user",
-  "blueprint": {{
-    "template": 1,
-    "font": "Poppins",
-    "animation_style": "fade",
-    "community_id": <integer>,
-    "content": [
-      {{
-        "type": 1,
-        "instance_key": "hero",
-        "style": 1,
-        "is_hidden": false,
-        "bg_image_url": "",
-        "bg_image_opacity": 0.5,
-        "title": "...",
-        "subtitle": "...",
-        "description": "...",
-        "image_url": "",
-        "image_ratio": "16:9",
-        "image_width": null,
-        "image_height": null,
-        "colors": {{ "title": "#eef4ff", "accent": "#3b82f6", "subtitle": "#e2e8f0", "body": "#cbd5e1", "bg": "#0f2044" }}
-      }},
-      ...more sections...,
-      {{ "type": 4, "instance_key": "footer", "style": 1, "is_hidden": false, "bg_image_url": "", "bg_image_opacity": 0.5, "title": "Contact Us", ... }}
-    ]
-  }},
-  "patches": null,
-  "image_prompts": {{ "hero": "Hands shaping a speckled clay mug on a potter's wheel in a riverside workshop, warm amber evening light", "about": "Handmade mugs and celadon bowls on a rustic wooden shelf beside a window" }}
-}}
-  image_prompts: REQUIRED on the onboarding FINAL intake (see GUIDED ONBOARDING INTAKE), describing
-  photos of THIS business; omit it on every other response.
-
-  animation_style options: {animation_options}
-  Pick the animation that matches the brand tone (fade for minimal, slide-up for bold, slide-left for tech/editorial, blur for luxury, none for ultra-minimal).
-
-OR when making targeted updates to an existing layout:
-{{
-  "reply": "...",
-  "blueprint": null,
-  "patches": [
-    {{ "action": "update_block", "type": "HERO", "instance_key": "hero", "updates": {{ "title": "New Title" }} }}
-  ]
-}}
-  action options:
-    "add_block"    — adding a NEW section that doesn't exist yet (e.g. user asks to add TEAM, FAQ, VISION)
-    "update_block" — modifying fields of an EXISTING section (title, color, style, etc.)
-    "delete_block" — removing an existing section
-  instance_key in patches: reuse the EXACT key shown in page_context (e.g. "team__2"). Omit if there's only one instance.
-  CRITICAL RULES for patches:
-  - ALWAYS use "add_block" (NOT "update_block") for every section that is listed as "NOT on page" in the page context.
-  - When user says "add it", "do it", "can you do it for me", "add testimonials", "add vision", etc. — use add_block for EACH requested section. Include real content (title, description, items) in the updates.
-  - NEVER send a full blueprint replacement when the user only wants to add or modify specific sections — use patches instead.
-  - When adding multiple sections at once, include ALL of them as separate add_block entries in the patches array.
-  - Each add_block MUST include: type (string name like "TEAM"), action, and updates with at minimum a "title" field so the section renders.
-
-OR when the user asks to change the animation style only:
-{{
-  "reply": "Animation changed to fade.",
-  "animation_style": "fade",
-  "blueprint": null,
-  "patches": null
-}}
-  Valid animation_style values: {animation_options}
-  IMPORTANT: Include animation_style at the top level of the envelope whenever you change it.
-  When returning a full blueprint, set animation_style inside blueprint AND at the top level.
-
-OR when just answering a question (no layout change):
-{{
-  "reply": "...",
-  "blueprint": null,
-  "patches": null
-}}
-
-== COMMUNICATION RULES ==
-- Reply in friendly conversational text. The chat renders LIGHT markdown only: use **bold** for
-  section names and for titles you suggest (e.g. **Hero**, how about **Fresh from the Kiln**?), and
-  "- " bullets ONLY when you list 2 or more changes. Never use headers (##), tables, code or backticks.
-- Reply in the user's language: if they write in Khmer, reply in Khmer; English in, English out.
-  EXCEPTION: when the request contains a "REPLY LANGUAGE:" line, write the reply in that language —
-  it wins over the language the user typed in.
-- Be direct and action-first. When the user asks to add, change, or redesign anything — DO IT immediately. Return the blueprint or patches in the same response. Do not ask for permission or confirmation first.
-- Never ask for clarification if page_context is provided or the request is specific enough to act on. Only ask questions if the user says something completely open-ended with zero context (e.g. literally just "build a page" with no community info at all).
-- Do not explain what you are about to do. Just do it and briefly describe what you did in the reply.
-- REPLY QUALITY: short — it shows in a small chat panel. 2-3 short sentences (or a short bullet list
-  for multiple changes). Name the 2-3 concrete design decisions you made in plain words
-  ("I went with a warm amber palette, a serif headline font and a polaroid-style gallery") — never
-  recite style numbers, hex codes, or field names at the user. End with ONE specific, actionable
-  suggestion for the next step ("Want me to add a FAQ for your delivery questions?"), not a generic
-  "let me know if you need anything".
-- If the user reports something looks wrong/broken, fix it via patches in the SAME response and say
-  exactly what you changed — never apologize without acting.
-
-== RULES ==
-1. Always return ONLY valid JSON — no code fences around it, no text outside the JSON (light
-   markdown INSIDE the "reply" string is fine, see COMMUNICATION RULES).
-2. Always include HERO at top and FOOTER at bottom in any full blueprint.
-3. Set blueprint.community_id to the COMMUNITY ID provided in context (REQUIRED — use the exact integer).
-4. IMAGES — STRICT RULES (never break these):
-   - NEVER generate, invent, guess, or suggest any image URL. Not even placeholder URLs.
-   - Always set image_url, logo_url, and ALL image fields to "" in every blueprint section you create.
-   - The ONLY exception: if page_context shows an existing image_url marked as ALREADY UPLOADED,
-     copy that exact URL — never overwrite it with "".
-   - EQUALLY VALID: Serey upload URLs (https://upload.serey.io/..., https://storage.serey.io/... or
-     any other *.serey.io host) that the USER's message provides under "Banner
-     images:", "Additional images:", or "[image: ...]" markers are user-uploaded images —
-     treat them exactly like ALREADY UPLOADED: copy them verbatim into the most suitable image
-     fields (see GUIDED ONBOARDING INTAKE) and do NOT list slots filled this way in uploads_needed.
-     A URL under "Logo:" is branding only: copy it only to FOOTER.logo_url, never to HERO,
-     ABOUT, GALLERY, or any other photo/image field.
-     URLs from any other domain are still banned — leave those fields "".
-   - If a section needs an image, set the field to "" — the user is prompted to upload it (rule 9).
-5. Only when the request has NO usable context at all (no page_context, no community or business
-   details — e.g. literally just "build my page"), set blueprint to null and ask guiding questions
-   like: "What kind of community is this? What's the main goal? Do you prefer a bold or minimal look?"
-   In every other case act immediately (see COMMUNICATION).
-6. Use patches (not a full blueprint) when the user asks to change a specific thing (title, color, style).
-   When user asks to change styles across the whole page ("choose different styles", "refresh the layout", "change all styles"):
-   → Send update_block patches for EVERY visible section including HERO and FOOTER. Never skip HERO in style changes.
-   → Use a DIFFERENT style number for each section — do not repeat the same style across sections.
-   → EXCEPTION: a GALLERY with section_subtype="product" always stays at style 1 (see rule 11) —
-     leave its style untouched and vary the other sections instead.
-7. Pick styles intelligently based on the user's described vibe. Only use style numbers from each
-   section's allowed list in the SECTION REGISTRY — anything else gets clamped to the default.
-8. Leave BLOG, NOTES and RANKING sections with only title/description — their data is auto-fetched.
-   BLOG and NOTES also accept feed_type: "trending" (default) or "latest".
-   For FOOTER social_links, always use object format: [{{"type": "facebook", "handle": "pagename"}}]
-   Never use plain strings like ["facebook.com/pagename"].
-   FAQ items use {{question, answer}} keys. Testimonial items use {{name, role, content, image_url}} keys.
-9. IMAGES / uploads_needed: on a full blueprint the server derives upload prompts from the final
-   layout itself — set "uploads_needed": null there. On patches (add_block / update_block) that add
-   or change image fields, list those slots in "uploads_needed". Rules:
-   - "section" = section type in lowercase (e.g. "hero", "gallery", "about", "team", "testimonials")
-   - "field"   = exact field name (e.g. "image_url", "images", "members", "testimonial_items")
-   - "index"   = integer ONLY for array fields (images[], members[], testimonial_items[]). Omit for simple image_url fields.
-   - "label"   = friendly user-facing label (e.g. "Product 1 — Image", "Hero Background")
-   Examples:
-     {{ "section": "hero",         "field": "image_url",            "label": "Hero Background" }}
-     {{ "section": "about",        "field": "image_url",            "label": "About Section Image" }}
-     {{ "section": "gallery",      "field": "images",    "index": 0, "label": "Product 1 — Image" }}
-     {{ "section": "team",         "field": "members",   "index": 0, "label": "Team Member 1 Photo" }}
-     {{ "section": "testimonials", "field": "testimonial_items", "index": 0, "label": "Reviewer 1 Avatar" }}
-   If no image fields are affected, set "uploads_needed": null.
-   Do not request uploads for image slots the chosen style does not render (e.g. hero style 3,
-   about styles 1/4/9, testimonials style 7).
-10. DUPLICATE SECTIONS: You may include multiple instances of the same type (e.g. two FAQ sections).
-    Assign unique instance_key values: first instance = the bare base name (e.g. "faq"); each
-    additional instance uses a DOUBLE underscore suffix: "faq__2", "faq__3". Never use "{{name}}_1".
-    When page_context lists an existing instance_key (e.g. "team__2"), reuse that EXACT key in
-    patches — never rename it. Hero and Footer are always singletons: "hero" and "footer".
-11. GALLERY subtype: ALWAYS set section_subtype on every type-3 section (blueprint or patch) —
-    "product" when showcasing products/services/features (items need real name + description),
-    "gallery" for a plain photo grid, "project" for portfolio project cards. With
-    section_subtype="product" you MUST ALWAYS set style to 1 — no exceptions, on full blueprints,
-    on patches, on redesigns, and on "change all styles" requests. Never pick any other product
-    style (2, 4, 5, 6) and never pick a photo-gallery style (2-7) for a product section, even when a
-    design recipe, the style weights, or a style-refresh request suggests otherwise; a product
-    section keeps style 1 while every other section varies.
-    In your reply, call a "product" section a "product section", not a "Gallery".
-12. SUBSCRIPTION: use type 13 for email signup. Leave newsletter_provider, kit_embed_script and
-    email_octopus_embed_script as "" unless the user pastes an embed script — never invent them.
-13. DESIGN PASS: when the user asks vaguely to improve the look ("make it look better", "more
-    professional", "modern design", "10x it") on an EXISTING page, do NOT send a full blueprint.
-    Send update_block patches for every visible section applying ONE design recipe consistently:
-    colors from its palette, the font pairing (font fields via hero text_styles), refreshed styles
-    per the recipe, and the visual rhythm rules — while keeping all existing text content and
-    uploaded images exactly as they are. Also set the recipe's animation_style at top level.
-14. BACKGROUND IMAGE RESTRAINT: set bg_image_url on at most ONE section per page, and only when a
-    suitable background image is already uploaded or the user asks for it. Full-bleed backgrounds
-    everywhere look heavy and slow.
-15. UNDO / REVERT: when the user asks to undo or bring back a specific previous value — in ANY
-    phrasing: "undo the color change", "put the old title back", "i want the old color theme back",
-    "make the hero like before", "give me the previous colors":
-    - If a PREVIOUS PAGE STATE block is provided, you MUST use it: read the old value from it and
-      restore EXACTLY that value via update_block patches — change only the fields the user wants
-      back, nothing else. NEVER claim you cannot see the previous version when that block is present.
-    - When restoring a previous color theme, emit an update_block patch for EVERY section listed in
-      PREVIOUS PAGE STATE — hero, footer, and every middle section. Skipping even one section leaves
-      mismatched leftover colors on the page.
-    - Only if NO previous state block exists, say honestly that you can't see the earlier version and
-      suggest the Undo button (or typing just "undo") which restores the whole previous page instantly.
-    - NEVER guess at what the old value might have been.
-16. WHAT YOU CAN SEE IN IMAGES — HONESTY RULE: you normally see only image URLs, never the
-    actual picture content. NEVER claim you can see what is in a photo, and NEVER invent or guess
-    what a product photo shows. The ONLY exception: when a "WHAT THE PAGE'S IMAGES ACTUALLY SHOW"
-    block is present, it contains a real vision analysis — trust it completely and use it (e.g. to
-    rename products to match their photos, matching each Image N to the item whose image_url it is).
-    If the user asks about image content and no such block is present, say you couldn't analyze the
-    images this time and ask them to describe the product instead.
-17. COLOR-ONLY REQUESTS — CRITICAL: when the user asks only about colors, theme, or palette
-    ("change the theme color", "make it blue", "darker background", "use warmer colors"):
-    - Send update_block patches whose updates contain ONLY the "colors" object (and title/subtitle
-      text colors inside it as needed).
-    - NEVER include "style" in the updates, never change fonts, animation, layout, images, or any
-      text content. The user asked for colors — changing the layout too feels like losing their page.
-    - The same applies in reverse: a layout/style request must not silently change colors.
-18. ADVISOR MODE — act like a design consultant, not a passive tool. When the user asks for your
-    opinion, a review, or help improving the site ("what do you think", "how does it look", "any
-    suggestions", "how can I improve this", "is this good"):
-    BOUNDARY with rule 13: an IMPERATIVE ("make it look better", "improve the design", "10x it")
-    is a command — do the design pass immediately. A QUESTION or request for input ("what do you
-    think", "how can I improve", "any suggestions?") is a consultation — advise first, change nothing.
-    - Actually AUDIT the PAGE STATE before answering. Check concretely: Is there a clear
-      call-to-action? Are there empty image slots (image_url: "")? Is the copy still generic or
-      placeholder-like? Are there sections a site like this usually needs but that are "NOT on page"
-      (e.g. FAQ, testimonials for a service business; gallery for a shop)? Do the section styles and
-      colors form one coherent look, or does one section clash? Is the page too long or repetitive?
-    - Give an honest verdict in one sentence, then the 2-3 MOST impactful specific improvements you
-      found — each tied to something real on the page ("your Gallery items still say Product 1 with
-      no descriptions", "there's no way for visitors to contact you"), never generic advice that
-      would fit any page.
-    - Do NOT change anything in that reply (blueprint null, patches null) — it's a consultation.
-      End by offering to apply the improvements ("Want me to fix all three?"). If they say yes /
-      "do it", apply ALL suggested improvements via patches in that response.
-    - If the page genuinely looks good, say so and name what works — don't invent problems. Then
-      suggest at most one optional next step.
-    - PROACTIVE TIPS: after completing any normal edit, if you noticed exactly ONE clearly missing
-      thing while reading the page state (empty images, no CTA, an obviously needed section), you
-      may mention it in one short sentence at the end of your reply as an offer. Never more than
-      one tip per reply, never repeat a tip the user already declined in this conversation, and
-      never let the tip delay or replace the requested change.
-"""
+    return f"{catalog.builder_prompt_from_doc()}\n\n{_SERVICE_ADDENDUM}"
 
 
 BUILDER_SYSTEM_PROMPT = _build_system_prompt()
@@ -1356,7 +1941,40 @@ async def builder_chat(request: BuilderChatRequest):
             )
 
     # When the user asks about images, look at them with the vision model first
-    vision_section, vision_used = await _vision_context(request.message, request.page_context)
+    # ...and look up what the community has (shop, podcast) at the same time.
+    (vision_section, vision_used), community_facts = await asyncio.gather(
+        _vision_context(request.message, request.page_context),
+        get_community_facts(request.community_id),
+    )
+    has_photos = _user_has_photos(request.message, request.page_context)
+    full_build = _is_full_build_request(request.message)
+    page_kind = _page_kind(request.message, community_facts) if full_build else "any"
+    photo_urls = _user_photo_urls(request.message, request.page_context) if full_build else []
+    full_build_note = (
+        _full_build_note(request.session_id, page_kind, has_photos, photo_urls) if full_build else ""
+    )
+    if full_build:
+        logger.info("Full build: page kind %s, %d user photo(s)%s", page_kind, len(photo_urls),
+                    " — photo gallery" if len(photo_urls) >= _PHOTO_GALLERY_MIN else "")
+    build_theme = _pick_build_theme(request.session_id) if full_build and _ai_picks_colours(request.message) else None
+    if build_theme:
+        full_build_note += _ai_palette_note(build_theme)
+        logger.info("Full build: random theme %s", build_theme["id"])
+    elif full_build:
+        build_theme = _chosen_theme(request.message)
+        if build_theme:
+            logger.info("Full build: theme from onboarding %r", build_theme["label"])
+    # A whole page gets more thinking and more creative freedom; small edits
+    # stay fast and predictable on the model defaults.
+    model_settings: dict[str, Any] = (
+        {
+            "model": BUILDER_FULL_MODEL,
+            "reasoning_effort": _FULL_BUILD_REASONING_EFFORT or None,
+            "temperature": _FULL_BUILD_TEMPERATURE,
+        }
+        if full_build else {}
+    )
+    used_model = model_settings.get("model") or grok.BUILDER_MODEL
 
     full_prompt = f"""{community_ctx}
 
@@ -1366,7 +1984,7 @@ async def builder_chat(request: BuilderChatRequest):
 
 ---
 
-{_reply_language_directive(reply_language)}USER: {request.message}
+{_reply_language_directive(reply_language)}USER: {request.message}{_onboarding_photo_gallery_note(request.message)}{_onboarding_contact_note(request.message)}{_community_facts_note(community_facts, has_photos)}{full_build_note}
 
 Respond with valid JSON now:
 """
@@ -1377,9 +1995,10 @@ Respond with valid JSON now:
     # serey-api settles credits from these.
     token_counts: dict[str, int] = grok.empty_usage()
     deadline = time.monotonic() + _BUILDER_TIME_BUDGET_S
+    auto_image_slots = _auto_image_slots(request.message)
     auto_image_task = (
-        asyncio.create_task(_prefetch_auto_images(request.message, deadline))
-        if _wants_auto_images(request.message)
+        asyncio.create_task(_prefetch_auto_images(request.message, deadline, auto_image_slots))
+        if auto_image_slots
         else None
     )
     prompt_for_attempt = full_prompt
@@ -1396,11 +2015,16 @@ Respond with valid JSON now:
         raw_response = ""
         remaining = deadline - time.monotonic()
         try:
+            call_timeout = min(grok.BUILDER_CALL_TIMEOUT_S, remaining)
+            if model_settings.get("model"):
+                # Leave room for the grok-4.3 fallback below.
+                call_timeout = min(call_timeout, _FULL_BUILD_CALL_TIMEOUT_S)
             raw_response, counts = await asyncio.to_thread(
                 grok.generate_builder_with_usage,
                 prompt_for_attempt,
                 BUILDER_SYSTEM_PROMPT,
-                min(grok.BUILDER_CALL_TIMEOUT_S, remaining),
+                call_timeout,
+                **model_settings,
             )
             token_counts = grok.add_usage(token_counts, counts)
             cleaned = _clean_raw(raw_response)
@@ -1447,6 +2071,20 @@ Respond with valid JSON now:
             prompt_for_attempt = full_prompt + (
                 _RETRY_NOTE_TRUNCATED if truncated else _RETRY_NOTE_INVALID_JSON
             )
+        except grok.APITimeoutError as e:
+            # The full-build model can get slow under load (grok-4.7 passed 90s
+            # with 4 builds at once). Build the page on the fast edit model
+            # instead of failing the turn — a plainer page beats an error.
+            if model_settings.get("model") and deadline - time.monotonic() >= _MIN_FALLBACK_BUDGET_S:
+                logger.warning(
+                    "Full build on %s timed out after %.0fs — retrying on %s",
+                    used_model, call_timeout, grok.BUILDER_MODEL,
+                )
+                model_settings = {"temperature": _FULL_BUILD_TEMPERATURE}
+                used_model = grok.BUILDER_MODEL
+                continue
+            logger.error("Grok timeout (attempt %d): %s", attempt, str(e))
+            raise HTTPException(status_code=502, detail=f"AI service unavailable: {str(e)}")
         except Exception as e:
             # Transient API errors were already retried inside grok; retrying
             # here again would only stack timeouts past the proxy budget.
@@ -1456,6 +2094,39 @@ Respond with valid JSON now:
         raise HTTPException(status_code=502, detail="AI service returned no data")
     assert isinstance(data, dict)  # type: narrowing for static analysis
 
+    # 3b. Quality check for a full page: send the model back once with the exact
+    # problems (invented facts, thin FAQ, filler, …) if the time budget allows,
+    # and keep whichever answer has fewer problems. Never fails the turn.
+    if data.get("blueprint"):
+        quality_known = (request.page_context or "") + "\n" + (request.message or "")
+        problems = _quality_problems(data, quality_known, request.message, build_theme is not None)
+        if problems:
+            logger.warning("Quality check: %d problem(s) in the page: %s", len(problems), "; ".join(problems))
+            if deadline - time.monotonic() >= _MIN_QUALITY_RETRY_BUDGET_S:
+                try:
+                    raw_retry, retry_counts = await asyncio.to_thread(
+                        grok.generate_builder_with_usage,
+                        full_prompt + _quality_retry_note(problems),
+                        BUILDER_SYSTEM_PROMPT,
+                        min(grok.BUILDER_CALL_TIMEOUT_S, deadline - time.monotonic()),
+                        # Same settings as the first try: grok-4.7 must keep its
+                        # low effort, its default thinks for ~3 minutes.
+                        **model_settings,
+                    )
+                    token_counts = grok.add_usage(token_counts, retry_counts)
+                    retry_data = _parse_model_json(raw_retry)
+                    if retry_data and retry_data.get("blueprint"):
+                        retry_problems = _quality_problems(retry_data, quality_known, request.message, build_theme is not None)
+                        logger.info("Quality check: retry has %d problem(s) (was %d)", len(retry_problems), len(problems))
+                        if len(retry_problems) < len(problems):
+                            data = retry_data
+                except grok.UnusableBuilderOutput as e:
+                    token_counts = grok.add_usage(token_counts, e.counts)
+                    logger.warning("Quality retry unusable (%s) — keeping the first page", e.reason)
+                except Exception as e:
+                    logger.warning("Quality retry failed (%s) — keeping the first page", e)
+            else:
+                logger.info("Quality check: no time left for a retry — keeping the first page")
     # 4. Extract envelope fields
     _VALID_ANIMATIONS = set(catalog.ANIMATION_STYLES)
     try:
@@ -1463,6 +2134,9 @@ Respond with valid JSON now:
         raw_blueprint = data.get("blueprint")
         raw_patches = data.get("patches")
         raw_uploads = data.get("uploads_needed")
+        raw_styles_selected = data.get("styles_selected")
+        raw_code_blocks = data.get("code_blocks")
+        model_revert = data.get("revert") is True
         raw_animation = data.get("animation_style")
         animation_style: str | None = (
             raw_animation if isinstance(raw_animation, str) and raw_animation in _VALID_ANIMATIONS else None
@@ -1470,6 +2144,15 @@ Respond with valid JSON now:
     except AttributeError as e:
         logger.error("Envelope extract error: %s | Data: %s", str(e), data)
         raise HTTPException(status_code=422, detail=f"AI returned unexpected format: {str(e)}")
+    # The contract is blueprint OR patches. A full page already contains every
+    # change, so the blueprint wins.
+    if raw_blueprint and raw_patches:
+        logger.warning("Model sent both blueprint and patches — dropped the %d patch(es)",
+                       len(raw_patches) if isinstance(raw_patches, list) else 0)
+        raw_patches = None
+    # Bob writes HTML as Custom Code sections, not floating code blocks: turn
+    # any code_blocks "add" into one (update/delete of existing blocks pass).
+    raw_code_blocks, raw_patches = _code_block_adds_to_sections(raw_code_blocks, raw_blueprint, raw_patches)
 
     def _normalize_blueprint(raw: dict) -> dict:
         """Fix common AI field name mismatches before Pydantic validation."""
@@ -1498,7 +2181,11 @@ Respond with valid JSON now:
             section_type = normalize_section_type(section.get("type"))
             if section_type:
                 section["type"] = section_type
-            style, style_changed = normalize_style(section_type, section.get("style"))
+            # Subtype first: it decides which style list (photo or product) applies.
+            if section_type == "GALLERY":
+                if section.get("section_subtype") not in (None, "", *catalog.GALLERY_SUBTYPES):
+                    section["section_subtype"] = "product"
+            style, style_changed = normalize_style(section_type, section.get("style"), section.get("section_subtype"))
             if style_changed:
                 logger.warning(
                     "Adjusted invalid blueprint style for section=%s from=%s to=%s based on backend canonical map",
@@ -1518,13 +2205,6 @@ Respond with valid JSON now:
                 section["section_theme"] = ""
             if section.get("image_shape") and section["image_shape"] not in catalog.IMAGE_SHAPES:
                 section["image_shape"] = ""
-            if section_type == "GALLERY":
-                if section.get("section_subtype") not in (None, "", *catalog.GALLERY_SUBTYPES):
-                    section["section_subtype"] = "product"
-                # ProductSection only renders styles 1-5; other numbers fall back to 1
-                if section.get("section_subtype") == "product" and section["style"] not in catalog.PRODUCT_SUBTYPE_STYLES:
-                    logger.warning("Clamped product-subtype gallery style %s to 1", section["style"])
-                    section["style"] = 1
             if section_type in ("BLOG", "NOTES") and section.get("feed_type"):
                 feed = str(section["feed_type"]).lower()
                 section["feed_type"] = "latest" if feed in ("new", "latest") else "trending"
@@ -1556,9 +2236,22 @@ Respond with valid JSON now:
             for link in section.get("social_links", []) or []:
                 if "platform" in link and "type" not in link:
                     link["type"] = link.pop("platform")
+        _ensure_onboarding_photo_gallery(raw["content"], request.message, community_facts.get("has_shop"))
+        _apply_community_facts(raw["content"], community_facts, has_photos)
         # Structure + safety pass: known types, one HERO/FOOTER (first/last),
-        # unique instance keys, no invented image URLs or embed scripts.
-        raw["content"] = sanitize_content(raw["content"], known_text)
+        # unique instance keys, no invented image URLs or embed scripts. The
+        # page's Custom Code sections come back unchanged.
+        page_content = (page_context_obj or {}).get("content")
+        raw["content"] = sanitize_content(raw["content"], known_text, page_content)
+        # Colour rules: Bob's Code sections use a background of the page's
+        # palette, and two sections next to each other never share one.
+        owned = page_code_keys(page_content)
+        if build_theme:
+            _apply_build_theme(raw["content"], build_theme, owned)
+        else:
+            apply_theme_to_code_sections(raw["content"], owned)
+        separate_adjacent_backgrounds(raw["content"], owned)
+        inject_code_theme_vars(raw["content"], owned)
         return raw
 
     # 5. Validate blueprint (if present)
@@ -1568,13 +2261,14 @@ Respond with valid JSON now:
         try:
             normalized_blueprint = _normalize_blueprint(raw_blueprint)
             # First build without any user images: generate the hero/about photos.
-            if _wants_auto_images(request.message):
+            if auto_image_slots:
                 prefetched_images = await auto_image_task if auto_image_task else None
                 generated_images = await _auto_fill_key_images(
                     normalized_blueprint,
                     data.get("image_prompts"),
                     deadline,
                     prefetched_images,
+                    auto_image_slots,
                 )
             blueprint = PageBlueprint(**normalized_blueprint)
         except Exception as e:
@@ -1637,10 +2331,17 @@ Respond with valid JSON now:
                 for img in updates.get("images") or []:
                     if isinstance(img, dict) and "title" in img and "name" not in img:
                         img["name"] = img.pop("title")
+                # The frontend displays a member's `bio` (blueprints get the same
+                # copy in schemas.blueprint.TeamMember).
+                for member in updates.get("members") or []:
+                    if isinstance(member, dict) and member.get("description") and not member.get("bio"):
+                        member["bio"] = member["description"]
                 if patch_type:
                     # Canonical backend map always wins for style IDs.
                     if "style" in updates:
-                        normalized_style, style_changed = normalize_style(patch_type, updates.get("style"))
+                        normalized_style, style_changed = normalize_style(
+                            patch_type, updates.get("style"), updates.get("section_subtype")
+                        )
                         if style_changed:
                             logger.warning(
                                 "Adjusted invalid patch style for section=%s from=%s to=%s based on backend canonical map",
@@ -1675,14 +2376,30 @@ Respond with valid JSON now:
     explicit_undo = (
         bool(_EXPLICIT_RESTORE_RE.search(_msg)) and not _PARTIAL_QUALIFIER_RE.search(_msg)
     ) or _is_full_undo(_msg)
-    if request.page_context and explicit_undo and blueprint is None and not patches:
+    # Custom HTML blocks ride along with any other change (not part of the
+    # blueprint-OR-patches rule) and count as a page change below.
+    code_blocks = _pass_code_blocks(raw_code_blocks, request.page_context)
+    if request.page_context and explicit_undo and blueprint is None and not patches and not code_blocks:
         logger.warning("Undo intent produced no patches — falling back to revert=True")
         revert_fallback = True
         reply = _revert_reply(_msg, reply_language, apologetic=False)
 
     final_layout = _derive_final_layout(blueprint, patches, page_context_obj)
-    style_reasons = _extract_style_reasons(raw_blueprint, normalized_patch_dicts)
-    styles_selected = _styles_selected_from_layout(final_layout, style_reasons)
+    # The model's own layout picks, validated — never rebuilt from the layout.
+    styles_selected = _validate_styles_selected(raw_styles_selected)
+    if styles_selected and color_only_request:
+        # Same guard as the patches above: a colour request never changes layouts.
+        logger.warning("Dropped %d styles_selected entries on color-only request", len(styles_selected))
+        styles_selected = []
+    # A first-build image may have switched its section to an image layout;
+    # a styles_selected entry for that section must not switch it back.
+    for image in generated_images:
+        for selection in styles_selected:
+            if (
+                normalize_section_type(selection.section) == normalize_section_type(image.section)
+                and (selection.instance_key or None) in (None, image.instance_key)
+            ):
+                selection.style = image.style
     _validate_ai_uploads_against_layout(raw_uploads, final_layout)
     uploads_needed = None
     if final_layout is not None:
@@ -1702,9 +2419,9 @@ Respond with valid JSON now:
     # 7. Remember this turn's incoming page state for future undo requests.
     # Only turns that changed the page overwrite the stored snapshot, so a
     # follow-up question doesn't erase the pre-change state.
-    if blueprint is not None or patches:
+    if blueprint is not None or patches or code_blocks:
         _store_prev_page_context(request.session_id, request.page_context)
-        changed_colors_only = bool(patches) and blueprint is None and (
+        changed_colors_only = bool(patches) and blueprint is None and not code_blocks and (
             color_only_request
             or all(p.action == "update_block" and set(p.updates.keys()) <= {"colors"} for p in patches)
         )
@@ -1718,6 +2435,10 @@ Respond with valid JSON now:
             saved_reply += f"\n[Generated blueprint with sections: {section_types}]"
         elif patches:
             saved_reply += f"\n[Applied {len(patches)} targeted updates]"
+        if code_blocks:
+            saved_reply += "\n[Code blocks: " + ", ".join(
+                f"{b.get('action')} {b.get('id') or b.get('section') or ''}".strip() for b in code_blocks
+            ) + "]"
         append_session_turn(
             session_id=request.session_id,
             user_message=request.message,
@@ -1728,23 +2449,27 @@ Respond with valid JSON now:
 
     # What this turn produced, which is what it costs. A blueprint is a whole
     # page and prices accordingly; patches and plain replies are one credit.
+    # The model may ask for a revert itself ("revert": true); the regex
+    # paths above still catch the common phrasings without it.
+    revert = revert_fallback or model_revert
     if blueprint is not None:
         outcome = "blueprint"
-    elif patches:
+    elif patches or code_blocks:
+        # A code-block change is a focused page change, priced like patches.
         outcome = "patches"
-    elif revert_fallback:
+    elif revert:
         outcome = "revert"
     else:
         outcome = "reply"
 
     return BuilderChatResponse(
         reply=reply,
-        revert=revert_fallback,
+        revert=revert,
         animation_style=animation_style,
         usage=BuilderUsage(
             outcome=outcome,
             vision_used=vision_used,
-            model=grok.BUILDER_MODEL,
+            model=used_model,
             images_generated=len(generated_images),
             **token_counts,
         ),
@@ -1752,6 +2477,7 @@ Respond with valid JSON now:
         patches=patches,
         uploads_needed=uploads_needed,
         styles_selected=styles_selected,
+        code_blocks=code_blocks,
         generated_images=generated_images or None,
         user_id=request.user_id,
         session_id=request.session_id,
