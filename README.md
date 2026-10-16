@@ -128,6 +128,9 @@ Run container:
 docker run --rm -p 8000:8000 --env-file .env serey-chatbot
 ```
 
+For production (or moving to a new server), use `docker compose up -d --build`.
+See [DEPLOY.md](DEPLOY.md).
+
 ## Data and Indexing
 
 - ChromaDB data is stored in `./chroma_db`.

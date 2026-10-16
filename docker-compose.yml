@@ -1,0 +1,14 @@
+services:
+  chatbot:
+    build: .
+    env_file: .env
+    ports:
+      # Host 8002 -> container 8000. serey-api and the frontend call :8002.
+      - "8002:8000"
+    volumes:
+      # Search index + chat memory live outside the image so rebuilds keep them.
+      - ./chroma_db:/app/chroma_db
+    extra_hosts:
+      # Lets REDIS_URL=redis://host.docker.internal:6379 reach Redis on this host.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
