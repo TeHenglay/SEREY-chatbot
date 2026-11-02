@@ -54,9 +54,9 @@ logger = logging.getLogger(__name__)
 
 _CHAT_API_KEY = os.getenv("CHAT_API_KEY", "")
 
-# serey-api's builder proxy aborts after 120s (BUILDER_TIMEOUT_MS); anything we
+# serey-api's builder proxy aborts after 200s (BUILDER_TIMEOUT_MS); anything we
 # generate after that is billed by xAI and thrown away. Keep a margin under it.
-_BUILDER_TIME_BUDGET_S = float(os.getenv("BUILDER_TIME_BUDGET_S", "110"))
+_BUILDER_TIME_BUDGET_S = float(os.getenv("BUILDER_TIME_BUDGET_S", "190"))
 # A re-generation is only attempted if at least this much budget is left.
 _MIN_RETRY_BUDGET_S = 30.0
 # A quality re-generation of a full page takes ~30-40s, so it needs more room.
@@ -64,7 +64,7 @@ _MIN_QUALITY_RETRY_BUDGET_S = 50.0
 # Full page builds: a stronger copywriter (grok-4.7), thinking on "low", and
 # more creative freedom. Measured (2026-10-15, 8 builds each): grok-4.7 "low"
 # ~40s with clearly better copy than grok-4.3 "medium" (~33s). Keep an effort
-# set for grok-4.7: on its default it thinks ~175s, past serey-api's 120s limit.
+# set for grok-4.7: on its default it thinks ~175s, past the 65s call limit below.
 # Edits stay on grok.BUILDER_MODEL (grok-4.3) with its default effort.
 BUILDER_FULL_MODEL = os.getenv("BUILDER_FULL_MODEL", "grok-4.7").strip()
 # Longest wait for the full-build model before falling back to grok-4.3
@@ -2150,6 +2150,11 @@ Respond with valid JSON now:
             if model_settings.get("model"):
                 # Leave room for the grok-4.3 fallback below.
                 call_timeout = min(call_timeout, _FULL_BUILD_CALL_TIMEOUT_S)
+            logger.info(
+                "Builder attempt %d on %s: prompt %d chars, %.0fs left, call limit %.0fs",
+                attempt, used_model, len(prompt_for_attempt), remaining, call_timeout,
+            )
+            call_started = time.monotonic()
             raw_response, counts = await asyncio.to_thread(
                 grok.generate_builder_with_usage,
                 prompt_for_attempt,
@@ -2157,6 +2162,7 @@ Respond with valid JSON now:
                 call_timeout,
                 **model_settings,
             )
+            logger.info("Builder attempt %d on %s: answered in %.0fs", attempt, used_model, time.monotonic() - call_started)
             token_counts = grok.add_usage(token_counts, counts)
             cleaned = _clean_raw(raw_response)
             if not cleaned:

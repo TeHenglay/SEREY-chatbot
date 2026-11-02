@@ -27,7 +27,7 @@ _GROK_MODEL = "grok-3-mini"
 # model — routes/builder_chat.py BUILDER_FULL_MODEL. Measured on full page builds
 # (2026-10-15, 8 runs each): grok-4.3 "medium" ~33s / ~$0.015, plainer copy;
 # grok-4.7 "low" ~40s / ~$0.029, clearly better copy and layout variety;
-# grok-4.7 on its default effort ~175s / ~$0.11 — past serey-api's 120s limit.
+# grok-4.7 on its default effort ~175s / ~$0.11 — past the full-build call limit.
 _GROK_BUILDER_MODEL = os.getenv("GROK_BUILDER_MODEL", "grok-4.3")
 # Vision model for image-understanding calls. Override with GROK_VISION_MODEL
 # (e.g. "grok-2-vision-1212") if the default rejects image input.
@@ -128,7 +128,7 @@ class UnusableBuilderOutput(Exception):
 
 
 # Fast, transient failures worth one immediate retry. Timeouts are NOT here: a
-# second slow attempt cannot fit in serey-api's 120s proxy budget.
+# second slow attempt would use up serey-api's proxy budget.
 _TRANSIENT_ERRORS = (APIConnectionError, RateLimitError, InternalServerError)
 
 
