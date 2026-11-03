@@ -291,7 +291,7 @@ SECTION_FIELD_DOCS: dict[str, str] = {
     "RANKING": "title, description, authors (always leave as []) — top authors are auto-fetched",
     "NOTES": 'title, description, feed_type ("trending" | "latest") — community notes are auto-fetched, never invent them',
     "PODCAST": 'title, description, feed_type ("latest" | "oldest") — episodes are auto-fetched, never invent them',
-    "SUBSCRIPTION": 'title, description, button_label ("Subscribe"), placeholder_text, newsletter_provider ("" | "kit" | "email_octopus"), kit_embed_script, email_octopus_embed_script — leave provider/embed fields "" unless the user provides them',
+    "SUBSCRIPTION": 'title, description, button_label ("Subscribe"), placeholder_text, newsletter_provider ("serey" | "kit" | "email_octopus"), kit_embed_script, email_octopus_embed_script — always use "serey" (Serey\'s own email list) and leave embed fields "", unless the user pastes a Kit or EmailOctopus embed code',
     "TEXTBLOCK": "title, description, content (free-form rich text) — emit type as the string \"TEXTBLOCK\" (it has no numeric ID)",
 }
 

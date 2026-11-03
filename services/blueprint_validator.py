@@ -192,6 +192,7 @@ _IMAGE_SCALAR_FIELDS = ("image_url", "image_url_2", "image_url_3", "image_url_4"
 _IMAGE_ITEM_ARRAYS = ("images", "members", "testimonial_items")
 # Third-party embed code is an XSS surface: only keep what the user supplied.
 _SCRIPT_FIELDS = ("kit_embed_script", "email_octopus_embed_script")
+NEWSLETTER_DEFAULT = "serey"
 _SINGLETON_TYPES = ("HERO", "FOOTER")
 VALID_PATCH_ACTIONS = ("add_block", "update_block", "delete_block")
 
@@ -258,6 +259,15 @@ def sanitize_section_fields(section: dict[str, Any], known_text: str) -> None:
             section[field] = ""
     if isinstance(section.get("colors"), dict):
         section["colors"] = sanitize_colors(section["colors"])
+
+
+def _newsletter_provider(section: dict[str, Any]) -> str:
+    """Serey mail, unless the section still holds a Kit/EmailOctopus embed the user supplied."""
+    if section.get("newsletter_provider") != NEWSLETTER_DEFAULT:
+        for provider, field in (("kit", "kit_embed_script"), ("email_octopus", "email_octopus_embed_script")):
+            if section.get(field):
+                return provider
+    return NEWSLETTER_DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -654,6 +664,8 @@ def sanitize_content(
                 continue
             singletons.add(stype)
         sanitize_section_fields(section, known_text)
+        if stype == "SUBSCRIPTION":
+            section["newsletter_provider"] = _newsletter_provider(section)
         cleaned.append(section)
     if code_sections:
         _restore_code_sections(cleaned, placed, page_content)
@@ -745,6 +757,13 @@ def sanitize_patch(
     updates = patch.get("updates")
     if isinstance(updates, dict):
         sanitize_section_fields(updates, known_text)
+        if ptype == "SUBSCRIPTION":
+            provider = _newsletter_provider(updates)
+            # An edit with no new embed must not move a Kit/EmailOctopus page off its provider.
+            if action == "add_block" or provider != NEWSLETTER_DEFAULT or updates.get("newsletter_provider") == NEWSLETTER_DEFAULT:
+                updates["newsletter_provider"] = provider
+            else:
+                updates.pop("newsletter_provider", None)
     patch["type"] = ptype
     return patch
 

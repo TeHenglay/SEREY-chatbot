@@ -238,7 +238,7 @@ class SectionBlock(BaseModel):
 
     # --- SUBSCRIPTION ---
     placeholder_text: str | None = None
-    newsletter_provider: str | None = Field(None, description="'' | 'kit' | 'email_octopus'")
+    newsletter_provider: str | None = Field(None, description="'serey' | 'kit' | 'email_octopus'")
     kit_embed_script: str | None = None
     email_octopus_embed_script: str | None = None
 
