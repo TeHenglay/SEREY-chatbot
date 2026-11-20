@@ -181,6 +181,11 @@ class BuilderChatResponse(BaseModel):
                     "{action: 'add', html, section?, instance_key?, height?, width?} | {action: 'update', id, html?, "
                     "height?, width?} | {action: 'delete', id}. May come with a blueprint or patches.",
     )
+    booking_services: Optional[list[dict[str, Any]]] = Field(
+        default=None,
+        description="Booking services the user asked to create, cleaned: {name, description, duration_minutes, "
+                    "price_usd}. The frontend saves them with the owner's token.",
+    )
     blueprint: Optional[PageBlueprint] = Field(
         default=None,
         description="Generated page blueprint if the user asked to build/modify a page",

@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-15T08:00:19.939Z",
+  "generated": "2026-11-20T06:56:39.843Z",
   "animation_styles": [
     "none",
     "fade",
@@ -150,6 +150,12 @@
           "value": 13,
           "label": "Spotlight",
           "description": "Portrait image with a star-rating badge, title/description with a \"Learn More\" button, and a small accent photo — fixed layout, elements cannot be repositioned",
+          "status": "picker"
+        },
+        {
+          "value": 14,
+          "label": "Banner Strip",
+          "description": "Full-width banner photo, big title beside the description, and a solid strip of social links with names and handles along the bottom",
           "status": "picker"
         },
         {
@@ -476,6 +482,12 @@
           "value": 9,
           "label": "News Row",
           "description": "Title with a \"View all news\" link to /blog, a slideshow of up to six dated cards with excerpts, three per slide",
+          "status": "picker"
+        },
+        {
+          "value": 10,
+          "label": "Carousel",
+          "description": "Large centered post image with the title on it, neighbours peeking at both sides, round arrows and bar indicators",
           "status": "picker"
         }
       ],
@@ -832,6 +844,48 @@
         "bg",
         "card_bg",
         "accent"
+      ]
+    },
+    {
+      "key": "booking",
+      "type": 18,
+      "name": "BOOKING",
+      "purpose": "Live list of the community's booking services, each with a Book button. Add it only when the community takes bookings, or the user asks for booking / appointments / reservations.",
+      "fields": {
+        "title": "string, max 250 chars — e.g. \"Book an Appointment\"",
+        "description": "string, max 200 chars"
+      },
+      "styles": [
+        {
+          "value": 1,
+          "label": "Cards",
+          "description": "Centered title over a grid of service cards with photo, length, price and Book button",
+          "status": "picker"
+        },
+        {
+          "value": 2,
+          "label": "List",
+          "description": "Clean rows like a price list: name and description left, length and price, Book button right",
+          "status": "picker"
+        },
+        {
+          "value": 3,
+          "label": "Split",
+          "description": "Title and description on the left, a compact list of services with Book buttons on the right",
+          "status": "picker"
+        },
+        {
+          "value": 4,
+          "label": "Cover",
+          "description": "Tall cards where the service photo fills the card, with name, price and Book button over it",
+          "status": "picker"
+        }
+      ],
+      "colors": [
+        "title",
+        "body",
+        "accent",
+        "bg"
       ]
     },
     {

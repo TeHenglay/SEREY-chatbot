@@ -69,6 +69,7 @@ SECTION_TYPE_ID_MAP: dict[int, str] = {
     14: "NEWSLETTER",
     15: "NOTES",
     16: "PODCAST",
+    18: "BOOKING",
 }
 
 SECTION_TYPE_NAME_TO_ID: dict[str, int] = {v: k for k, v in SECTION_TYPE_ID_MAP.items()}
@@ -291,6 +292,7 @@ SECTION_FIELD_DOCS: dict[str, str] = {
     "RANKING": "title, description, authors (always leave as []) — top authors are auto-fetched",
     "NOTES": 'title, description, feed_type ("trending" | "latest") — community notes are auto-fetched, never invent them',
     "PODCAST": 'title, description, feed_type ("latest" | "oldest") — episodes are auto-fetched, never invent them',
+    "BOOKING": "title, description — the community's booking services and their Book buttons are auto-fetched, never invent them. Only add it when the community takes bookings or the user asks for booking / appointments / reservations",
     "SUBSCRIPTION": 'title, description, button_label ("Subscribe"), placeholder_text, newsletter_provider ("serey" | "kit" | "email_octopus"), kit_embed_script, email_octopus_embed_script — always use "serey" (Serey\'s own email list) and leave embed fields "", unless the user pastes a Kit or EmailOctopus embed code',
     "TEXTBLOCK": "title, description, content (free-form rich text) — emit type as the string \"TEXTBLOCK\" (it has no numeric ID)",
 }
@@ -354,7 +356,7 @@ FRONTEND_TEMPLATES: dict[str, dict[str, Any]] = {
 # 2026-07-31; a type 11 section without `html` is legacy data from it.)
 GENERATABLE_SECTIONS: tuple[str, ...] = (
     "HERO", "ABOUT", "GALLERY", "FOOTER", "VIDEO", "VISION", "BLOG", "TEAM",
-    "FAQ", "TESTIMONIALS", "RANKING", "SUBSCRIPTION", "NOTES", "PODCAST", "TEXTBLOCK",
+    "FAQ", "TESTIMONIALS", "RANKING", "SUBSCRIPTION", "NOTES", "PODCAST", "BOOKING", "TEXTBLOCK",
 )
 
 # The Custom Code section: type 11, builder key "code" (extra copies "code__2", …).

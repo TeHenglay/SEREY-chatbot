@@ -135,7 +135,7 @@ _EXPLICIT_RESTORE_RE = re.compile(
 # revert ("undo the color change on the hero only", "restore my old logo").
 _PARTIAL_QUALIFIER_RE = re.compile(
     r"\b(only|just|except|section|hero|footer|gallery|galleries|team|about|faq|testimonial(s)?"
-    r"|vision|video|blog|ranking|subscription|newsletter|notes|podcast|custom|map|countdown"
+    r"|vision|video|blog|ranking|subscription|newsletter|notes|podcast|booking|custom|map|countdown"
     r"|logo|title|subtitle|heading|button|menu|font|image|photo|picture|mockup|screenshot)\b",
     re.IGNORECASE,
 )
@@ -582,30 +582,6 @@ def _user_uploaded_photos(message: str) -> bool:
 
 # Gallery photos already on the page (buildPageContext: 'item 1 "Loaf" image_url: "https://…"').
 _PAGE_GALLERY_PHOTO_RE = re.compile(r'\bitem \d+ "[^"\n]*" image_url: "https?://')
-
-
-# Gallery item photos in the page context ('item 3 "Name" image_url: "…"'). Hero
-# and about images are left out: on a rebuild they are often AI-generated.
-_PAGE_PHOTO_URL_RE = re.compile(r'\bitem \d+ "[^"\n]*" image_url: "(https?://[^"\s]+)"')
-# This many photos or more: the full build's Code section is a photo gallery.
-_PHOTO_GALLERY_MIN = int(os.getenv("BUILDER_PHOTO_GALLERY_MIN", "7"))
-_PHOTO_GALLERY_MAX = 10
-
-
-def _user_photo_urls(message: str, page_context: str | None) -> list[str]:
-    """The user's photos, in order and without duplicates: uploaded with this
-    message (onboarding fields, [image: …], attachments) and already in the
-    page's galleries. The logo does not count."""
-    message = message or ""
-    logos = {m.group(1).rstrip(".,;") for m in _LOGO_URL_RE.finditer(message)}
-    page_logo = re.findall(r"\blogo_url\"?\s*[:=]\s*\"?(https?://[^\s\"'<>\)\]]+)", page_context or "")
-    logos |= {u.rstrip(".,;") for u in page_logo}
-    urls: list[str] = []
-    for url in _extract_message_image_urls(message) + _PAGE_PHOTO_URL_RE.findall(page_context or ""):
-        url = url.rstrip(".,;")
-        if url not in logos and url not in urls and not _NON_IMAGE_HOST_RE.search(url):
-            urls.append(url)
-    return urls
 
 
 def _user_has_photos(message: str, page_context: str | None) -> bool:
@@ -1211,31 +1187,12 @@ def _apply_build_theme(content: list[dict[str, Any]], theme: dict[str, str], pag
         section["colors"] = {k: v for k, v in colors.items() if k in keys or k == "bg"}
 
 
-def _photo_gallery_format(urls: list[str]) -> str:
-    listed = "\n".join(f"  {i}. {u}" for i, u in enumerate(urls[:_PHOTO_GALLERY_MAX], 1))
-    return (
-        f"a photo gallery of expanding panels built from the user's {min(len(urls), _PHOTO_GALLERY_MAX)} "
-        f"uploaded photos, one per panel, in this order:\n{listed}\n"
-        "Each panel shows its photo filling it (background-image: url(...); background-size: cover; "
-        "background-position: center). The hovered, focused or clicked panel widens to about four times the "
-        "others; the first one starts open. Collapsed panels show only the photo and a small number — no text "
-        "that could be cut off. The open panel may show a one-line caption at the bottom, but only when the "
-        "image analysis or the user says what that photo shows; otherwise no caption. Panels are buttons with "
-        "an aria-label, and arrow keys move between them. On phones: a horizontal scroll-snap row of tall "
-        "cards instead. Use no other image URLs"
-    )
-
-
 def _draw_code_format(
     session_id: str = "",
     kind: str = "any",
     has_photos: bool = False,
-    photo_urls: list[str] | None = None,
 ) -> str:
-    """One Code section format: a photo gallery when the user has enough
-    photos, else one for this kind of page from that kind's shuffle bag."""
-    if photo_urls and len(photo_urls) >= _PHOTO_GALLERY_MIN:
-        return _photo_gallery_format(photo_urls)
+    """One Code section format for this kind of page, from that kind's shuffle bag."""
     last = _last_code_block_format.get(session_id, (0.0, ""))[1]
     texts = dict(_formats_for(kind, has_photos))
     interactive = {key for key, is_interactive, *_rest in _CODE_FORMATS if is_interactive}
@@ -1256,11 +1213,10 @@ def _full_build_note(
     session_id: str = "",
     kind: str = "any",
     has_photos: bool = False,
-    photo_urls: list[str] | None = None,
 ) -> str:
     """The full-build service note with one Code section format."""
     return _FULL_BUILD_CODE_BLOCKS_NOTE.replace(
-        "{format}", _draw_code_format(session_id, kind, has_photos, photo_urls)
+        "{format}", _draw_code_format(session_id, kind, has_photos)
     )
 
 
@@ -1836,6 +1792,39 @@ def _code_block_locked(page_context: str | None, block_id: str) -> bool:
     return False
 
 
+_BOOKING_DURATIONS = (15, 30, 45, 60, 90, 120)
+_MAX_BOOKING_SERVICES = 5
+
+
+def _pass_booking_services(raw: Any) -> list[dict[str, Any]] | None:
+    """The model's booking_services, cleaned to what serey-api accepts: a name,
+    a listed length (nearest one), a price 0..10000. Bad entries are dropped."""
+    if not isinstance(raw, list):
+        return None
+    cleaned: list[dict[str, Any]] = []
+    for entry in raw[:_MAX_BOOKING_SERVICES]:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()[:80]
+        if not name:
+            continue
+        try:
+            minutes = float(entry.get("duration_minutes") or 60)
+        except (TypeError, ValueError):
+            minutes = 60
+        try:
+            price = round(float(entry.get("price_usd") or 0), 2)
+        except (TypeError, ValueError):
+            price = 0.0
+        cleaned.append({
+            "name": name,
+            "description": str(entry.get("description") or "").strip()[:200],
+            "duration_minutes": min(_BOOKING_DURATIONS, key=lambda d: abs(d - minutes)),
+            "price_usd": min(max(price, 0.0), 10000.0),
+        })
+    return cleaned or None
+
+
 def _pass_code_blocks(raw: Any, page_context: str | None) -> list[dict[str, Any]] | None:
     """The model's code_blocks, passed through unchanged — the frontend applies
     and caps them (catalog `code_blocks` spec). Only non-object entries are
@@ -1907,6 +1896,22 @@ The AI service adds some blocks to the user message. These rules explain them; t
   episodes) and whether the user uploaded photos. Follow it on every full page build, even over a fixed section
   list: product section only with a shop (and always with one), PODCAST when there are episodes, no photo gallery
   without photos.
+
+### Booking services (top-level `booking_services`)
+When the user asks to create or add something people can book (a service, appointment, class, session, lesson,
+consultation, tour or other bookable event), send `booking_services`: a list of
+`{ "name": "...", "description": "...", "duration_minutes": 60, "price_usd": 0 }`.
+- They are created for real in the community's booking system. Only when the user asks — never on your own,
+  never on a full page build they did not ask it for, at most 5 per answer, and never again for services you
+  already created in this conversation.
+- `name`: up to 80 characters. `description`: up to 200 characters from what the user said, or "".
+- `duration_minutes`: one of 15, 30, 45, 60, 90, 120 — what the user said, rounded to the nearest; 60 if they
+  gave none. `price_usd`: the price they gave (0–10000); 0 (free) if they gave none.
+- In the same answer, if the page has no BOOKING section, add one: an `add_block` patch with `"type": 18` and
+  `updates` `{ "title": "...", "description": "..." }` (or put it before FOOTER in a full page).
+- `reply`: list what you created with length and price. When you used a default (60 minutes, free), say so and
+  that they can change it in the Booking dashboard. You cannot edit or delete services, set opening hours or
+  turn on card payments — for those, point to the Booking dashboard.
 
 ### Custom Code sections (type 11, key `code`) — instead of code blocks
 This overrides the "Code / HTML blocks" part above and the rule against sending type 11. When you write HTML
@@ -2068,13 +2073,11 @@ async def builder_chat(request: BuilderChatRequest):
     has_photos = _user_has_photos(request.message, request.page_context)
     full_build = _is_full_build_request(request.message)
     page_kind = _page_kind(request.message, community_facts) if full_build else "any"
-    photo_urls = _user_photo_urls(request.message, request.page_context) if full_build else []
     full_build_note = (
-        _full_build_note(request.session_id, page_kind, has_photos, photo_urls) if full_build else ""
+        _full_build_note(request.session_id, page_kind, has_photos) if full_build else ""
     )
     if full_build:
-        logger.info("Full build: page kind %s, %d user photo(s)%s", page_kind, len(photo_urls),
-                    " — photo gallery" if len(photo_urls) >= _PHOTO_GALLERY_MIN else "")
+        logger.info("Full build: page kind %s", page_kind)
     else:
         # The page state tells what kind of page this is better than a short edit request.
         edit_kind = _page_kind(f"{request.page_context or ''}\n{request.message or ''}", community_facts)
@@ -2273,6 +2276,7 @@ Respond with valid JSON now:
         raw_uploads = data.get("uploads_needed")
         raw_styles_selected = data.get("styles_selected")
         raw_code_blocks = data.get("code_blocks")
+        raw_booking_services = data.get("booking_services")
         model_revert = data.get("revert") is True
         raw_animation = data.get("animation_style")
         animation_style: str | None = (
@@ -2518,6 +2522,7 @@ Respond with valid JSON now:
     # Custom HTML blocks ride along with any other change (not part of the
     # blueprint-OR-patches rule) and count as a page change below.
     code_blocks = _pass_code_blocks(raw_code_blocks, request.page_context)
+    booking_services = _pass_booking_services(raw_booking_services)
     if request.page_context and explicit_undo and blueprint is None and not patches and not code_blocks:
         logger.warning("Undo intent produced no patches — falling back to revert=True")
         revert_fallback = True
@@ -2559,7 +2564,7 @@ Respond with valid JSON now:
     # "the map is added" when nothing appeared: the model's changes were all dropped
     # by validation, or it added a Custom Code section with no html (shows nothing live).
     model_tried_change = bool(raw_blueprint) or bool(raw_patches) or bool(raw_code_blocks)
-    if model_tried_change and blueprint is None and not patches and not code_blocks and not revert_fallback and not model_revert:
+    if model_tried_change and blueprint is None and not patches and not code_blocks and not booking_services and not revert_fallback and not model_revert:
         logger.warning("All of the model's page changes were dropped — replacing its reply")
         reply = _nothing_changed_reply(reply_language, request.message)
     elif any(
@@ -2601,6 +2606,8 @@ Respond with valid JSON now:
             saved_reply += "\n[Code blocks: " + ", ".join(
                 f"{b.get('action')} {b.get('id') or b.get('section') or ''}".strip() for b in code_blocks
             ) + "]"
+        if booking_services:
+            saved_reply += "\n[Created booking services: " + ", ".join(s["name"] for s in booking_services) + "]"
         append_session_turn(
             session_id=request.session_id,
             user_message=request.message,
@@ -2616,7 +2623,7 @@ Respond with valid JSON now:
     revert = revert_fallback or model_revert
     if blueprint is not None:
         outcome = "blueprint"
-    elif patches or code_blocks:
+    elif patches or code_blocks or booking_services:
         # A code-block change is a focused page change, priced like patches.
         outcome = "patches"
     elif revert:
@@ -2640,6 +2647,7 @@ Respond with valid JSON now:
         uploads_needed=uploads_needed,
         styles_selected=styles_selected,
         code_blocks=code_blocks,
+        booking_services=booking_services,
         generated_images=generated_images or None,
         user_id=request.user_id,
         session_id=request.session_id,

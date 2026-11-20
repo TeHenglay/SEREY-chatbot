@@ -110,7 +110,7 @@ Choose by what the brand is:
 - Portfolio / creator → HERO, ABOUT, GALLERY with `section_subtype: "gallery"`, VIDEO, TESTIMONIALS, FOOTER.
 - Goal / vision / mission text always goes in VISION, never in ABOUT. When the user describes their goals,
   vision or mission, add VISION (or update it if it is already on the page) even if they did not ask for a section.
-- BLOG, NOTES, PODCAST and RANKING show live platform content; you only write their title and description.
+- BLOG, NOTES, PODCAST, BOOKING and RANKING show live platform content; you only write their title and description.
 
 ### Picking layouts
 Pick the layout that fits the content you actually have:
@@ -230,6 +230,7 @@ Layout styles (`style`):
   - 4 — Text Only: Centered title and description, no image
   - 9 — Split Panel: Two columns: description on a light panel, title on a slightly darker panel
   - 13 — Spotlight: Portrait image with a star-rating badge, title/description with a "Learn More" button, and a small accent photo — fixed layout, elements cannot be repositioned
+  - 14 — Banner Strip: Full-width banner photo, big title beside the description, and a solid strip of social links with names and handles along the bottom
   - 10 — Social: Multi Image (variant of style 8): Social layout with a multi-photo grid (image_url and image_url_2) instead of one image
   - 11 — Split Panel: Image Right (variant of style 9): Split Panel with an image on the right
   - 12 — Split Panel: Split + Image (variant of style 9): Split Panel with an image below the two panels
@@ -326,6 +327,7 @@ Layout styles (`style`):
   - 7 — Mag Front Page: Magazine front page: masthead label above the title, one large featured post with image beside a sidebar of headline posts
   - 8 — Editorial Strip: Title and subtitle above a rule, three square images with captions below
   - 9 — News Row: Title with a "View all news" link to /blog, a slideshow of up to six dated cards with excerpts, three per slide
+  - 10 — Carousel: Large centered post image with the title on it, neighbours peeking at both sides, round arrows and bar indicators
 
 Colour keys: title, accent, body, bg
 
@@ -448,6 +450,21 @@ Layout styles (`style`):
   - 6 — Split Image: Equal two-column split: title, description and form on the left, a full-height photo on the right
 
 Colour keys: bg, card_bg, accent
+
+### BOOKING — type 18
+Live list of the community's booking services, each with a Book button. Add it only when the community takes bookings, or the user asks for booking / appointments / reservations.
+
+Fields:
+- `title` — string, max 250 chars — e.g. "Book an Appointment"
+- `description` — string, max 200 chars
+
+Layout styles (`style`):
+  - 1 — Cards: Centered title over a grid of service cards with photo, length, price and Book button
+  - 2 — List: Clean rows like a price list: name and description left, length and price, Book button right
+  - 3 — Split: Title and description on the left, a compact list of services with Book buttons on the right
+  - 4 — Cover: Tall cards where the service photo fills the card, with name, price and Book button over it
+
+Colour keys: title, body, accent, bg
 
 ### FOOTER — type 4 (always on the page)
 Contact details and social links.

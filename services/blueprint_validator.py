@@ -339,6 +339,10 @@ _EMOJI_RE = re.compile(
 )
 _CSS_DECL_END = r"[^;{}\"']*;?"
 _GRADIENT_DECL_RE = re.compile(r"[\w-]+\s*:[^;{}\"']*gradient\(" + _CSS_DECL_END, re.IGNORECASE)
+# gradient layers next to a photo
+_GRADIENT_CALL = r"(?:-\w+-)?(?:repeating-)?(?:linear|radial|conic)-gradient\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)"
+_GRADIENT_BEFORE_IMAGE_RE = re.compile(rf"(?:{_GRADIENT_CALL}\s*,\s*)+(?=url\()", re.IGNORECASE)
+_GRADIENT_AFTER_IMAGE_RE = re.compile(rf"(url\([^()]*\)[^,;{{}}\"']*)(?:\s*,\s*{_GRADIENT_CALL})+", re.IGNORECASE)
 _TEXT_CLIP_DECL_RE = re.compile(
     r"(?:-webkit-)?(?:background-clip\s*:\s*text|text-fill-color\s*:\s*transparent)\s*;?"
     r"|(?<![\w-])color\s*:\s*transparent\s*;?",
@@ -357,6 +361,8 @@ def clean_code_html(html: Any) -> str:
         return ""
     html = _CODE_FENCE_RE.sub("", html.strip())
     html = _EMOJI_RE.sub("", html)
+    html = _GRADIENT_BEFORE_IMAGE_RE.sub("", html)
+    html = _GRADIENT_AFTER_IMAGE_RE.sub(r"\1", html)
     html = _GRADIENT_DECL_RE.sub("", html)
     html = _TEXT_CLIP_DECL_RE.sub("", html)
     html = _VIEWPORT_HEIGHT_RE.sub("", html)

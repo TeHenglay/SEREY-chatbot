@@ -60,7 +60,7 @@ PICKER_TO_CATALOG = {
     "vision": "VISION", "blog": "BLOG", "team": "TEAM", "faq": "FAQ",
     "testimonials": "TESTIMONIALS", "ranking": "RANKING",
     "subscription": "SUBSCRIPTION", "footer": "FOOTER", "notes": "NOTES",
-    "podcast": "PODCAST",
+    "podcast": "PODCAST", "booking": "BOOKING",
 }
 
 
